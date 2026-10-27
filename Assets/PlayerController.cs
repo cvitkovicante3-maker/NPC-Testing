@@ -1,51 +1,73 @@
 using UnityEngine;
-using UnityEngine.InputSystem; // Uses the modern input system
 
-public class PlayerController : MonoBehaviour
+public class ThirdPersonCamera : MonoBehaviour
 {
-    [Header("Movement Settings")]
-    public float moveSpeed = 7f;
+    [Header("Target")]
+    public Transform target;                 // Your character
+    public Vector3 targetOffset = new Vector3(0f, 1.6f, 0f); // Look at roughly head height
 
-    [Header("Camera Settings")]
-    public Camera playerCamera;
-    public Vector3 cameraOffset = new Vector3(0f, 2f, -4f);
+    [Header("Orbit")]
+    public float distance = 4f;
+    public float mouseSensitivity = 3f;
+    public float minPitch = -30f;
+    public float maxPitch = 70f;
+    public float followSmoothing = 15f;
+
+    [Header("Collision")]
+    public bool avoidWalls = true;
+    public float collisionRadius = 0.25f;
+    public LayerMask collisionMask = ~0;     // Everything by default
+
+    private float yaw;
+    private float pitch = 15f;
 
     void Start()
     {
-        // Set up the camera placement on game start if assigned
-        if (playerCamera != null)
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+
+        if (target == null)
         {
-            playerCamera.transform.SetParent(this.transform);
-            playerCamera.transform.localPosition = cameraOffset;
-            playerCamera.transform.localRotation = Quaternion.Euler(15f, 0f, 0f);
+            GameObject player = GameObject.FindGameObjectWithTag("Player");
+            if (player != null) target = player.transform;
         }
-        else
-        {
-            Debug.LogWarning("Please drag and drop your Main Camera into the PlayerController component!");
-        }
+
+        yaw = transform.eulerAngles.y;
     }
 
-    void Update()
+    void LateUpdate()
     {
-        // Directly check the keyboard state using the New Input System
-        var keyboard = Keyboard.current;
-        if (keyboard == null) return; // No keyboard connected
+        if (target == null) return;
 
-        float moveX = 0f;
-        float moveZ = 0f;
+        // Mouse input
+        yaw += Input.GetAxis("Mouse X") * mouseSensitivity;
+        pitch -= Input.GetAxis("Mouse Y") * mouseSensitivity;
+        pitch = Mathf.Clamp(pitch, minPitch, maxPitch);
 
-        // Read W / S or Up / Down Arrow
-        if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed) moveZ = 1f;
-        if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed) moveZ = -1f;
+        Quaternion rotation = Quaternion.Euler(pitch, yaw, 0f);
+        Vector3 focusPoint = target.position + targetOffset;
+        Vector3 desiredPos = focusPoint - rotation * Vector3.forward * distance;
 
-        // Read A / D or Left / Right Arrow
-        if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed) moveX = -1f;
-        if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed) moveX = 1f;
+        // Pull the camera in if something is between it and the character
+        if (avoidWalls)
+        {
+            Vector3 dir = desiredPos - focusPoint;
+            if (Physics.SphereCast(focusPoint, collisionRadius, dir.normalized, out RaycastHit hit,
+                                   distance, collisionMask, QueryTriggerInteraction.Ignore)
+                && !hit.transform.IsChildOf(target))
+            {
+                desiredPos = focusPoint + dir.normalized * hit.distance;
+            }
+        }
 
-        // Calculate direction based on player orientation
-        Vector3 movement = (transform.forward * moveZ) + (transform.right * moveX);
+        transform.position = Vector3.Lerp(transform.position, desiredPos, followSmoothing * Time.deltaTime);
+        transform.rotation = rotation;
 
-        // Move the player forward, backward, or sideways
-        transform.Translate(movement.normalized * moveSpeed * Time.deltaTime, Space.World);
+        // Unlock cursor with Escape
+        if (Input.GetKeyDown(KeyCode.Escape))
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
     }
 }
