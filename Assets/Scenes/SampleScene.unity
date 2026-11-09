@@ -243,7 +243,7 @@ GameObject:
   - component: {fileID: 330585545}
   - component: {fileID: 330585544}
   - component: {fileID: 330585547}
-  - component: {fileID: 330585548}
+  - component: {fileID: 330585549}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -319,7 +319,7 @@ Transform:
   m_GameObject: {fileID: 330585543}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 1, z: -10}
+  m_LocalPosition: {x: 7.4, y: 1, z: 13.5}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -369,7 +369,7 @@ MonoBehaviour:
     m_VarianceClampScale: 0.9
     m_ContrastAdaptiveSharpening: 0
   m_Version: 2
---- !u!114 &330585548
+--- !u!114 &330585549
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -380,20 +380,23 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 5570a1b6f655b224e8693f15aec3b859, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::ThirdPersonCamera
+  m_EditorClassIdentifier: Assembly-CSharp::GTAFollowCamera
   target: {fileID: 325487461}
-  distance: 4.78
-  height: 4.16
-  lookHeight: 1.86
-  shoulderOffset: 6.21
-  swingSpeed: 2.5
-  positionSmoothTime: 0.12
-  rotationSmoothing: 10
+  distance: 5.5
+  height: 2.4
+  lookHeight: 2.23
+  shoulderOffset: 0
+  swingSmoothTime: 0.45
+  maxSwingSpeed: 60
+  swingOnlyWhileMoving: 1
+  movingThreshold: 0.3
+  verticalSmoothing: 8
   avoidWalls: 1
   collisionMask:
     serializedVersion: 2
     m_Bits: 4294967295
   wallPadding: 0.25
+  collisionRecoverTime: 0.25
 --- !u!1 &410087039
 GameObject:
   m_ObjectHideFlags: 0
@@ -1149,7 +1152,7 @@ Transform:
   m_GameObject: {fileID: 1807482984}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 8.8173, y: 2.27, z: 1.01}
+  m_LocalPosition: {x: 8.8173, y: 2.44, z: 1.01}
   m_LocalScale: {x: 2, y: 2, z: 2}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1170,9 +1173,10 @@ MonoBehaviour:
   path: {fileID: 1397460799}
   splineIndex: 0
   startOffset: 0
-  speed: 2
+  speed: 5
   endBehaviour: 0
   waitAtEnd: 0
+  standOnSpline: 1
   positionOffset: {x: 0, y: 0, z: 0}
   faceMoveDirection: 1
   keepUpright: 1
@@ -1214,7 +1218,8 @@ GameObject:
   - component: {fileID: 2055975601}
   - component: {fileID: 2055975604}
   - component: {fileID: 2055975603}
-  - component: {fileID: 2055975602}
+  - component: {fileID: 2055975606}
+  - component: {fileID: 2055975605}
   m_Layer: 0
   m_Name: Player Capsule
   m_TagString: Untagged
@@ -1232,34 +1237,11 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
   m_LocalPosition: {x: 6.09124, y: 2.07, z: 1.3010292}
-  m_LocalScale: {x: 2, y: 2, z: 1}
+  m_LocalScale: {x: 2, y: 2, z: 2}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 325487461}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!136 &2055975602
-CapsuleCollider:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2055975600}
-  m_Material: {fileID: 0}
-  m_IncludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_ExcludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_LayerOverridePriority: 0
-  m_IsTrigger: 0
-  m_ProvidesContacts: 0
-  m_Enabled: 1
-  serializedVersion: 2
-  m_Radius: 0.5
-  m_Height: 2
-  m_Direction: 1
-  m_Center: {x: 0, y: 0, z: 0}
 --- !u!23 &2055975603
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1317,6 +1299,53 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2055975600}
   m_Mesh: {fileID: 10208, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!114 &2055975605
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2055975600}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d28e8b2066034b64690d8bc13159cf7a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::GTAPlayerMovement
+  runSpeed: 5
+  sprintSpeed: 8
+  backwardSpeedMultiplier: 0.5
+  acceleration: 14
+  deceleration: 22
+  turnSpeed: 150
+  turnSmoothing: 12
+  sprintTurnMultiplier: 0.7
+  jumpHeight: 1.1
+  gravity: -22
+--- !u!143 &2055975606
+CharacterController:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2055975600}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Height: 2
+  m_Radius: 0.5
+  m_SlopeLimit: 45
+  m_StepOffset: 0.3
+  m_SkinWidth: 0.08
+  m_MinMoveDistance: 0.001
+  m_Center: {x: 0, y: 0, z: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

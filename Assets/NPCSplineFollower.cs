@@ -22,7 +22,9 @@ public class NPCSplineFollower : MonoBehaviour
     [SerializeField] private EndBehaviour endBehaviour = EndBehaviour.Loop;
     [Tooltip("Seconds to wait at the end (PingPong / Stop-then-wait).")]
     [SerializeField] private float waitAtEnd = 0f;
-    [Tooltip("Offset from the spline point, in world units (e.g. raise the NPC so feet touch the ground).")]
+    [Tooltip("Lifts the NPC so the BOTTOM of its model sits on the spline, instead of its center (stops NPCs sinking into the ground).")]
+    [SerializeField] private bool standOnSpline = true;
+    [Tooltip("Extra offset from the spline point, in world units.")]
     [SerializeField] private Vector3 positionOffset = Vector3.zero;
 
     [Header("Rotation")]
@@ -34,6 +36,7 @@ public class NPCSplineFollower : MonoBehaviour
     /// <summary>Current speed. Handy for driving an Animator.</summary>
     public float CurrentSpeed { get; private set; }
 
+    private float feetOffset;
     private float splineLength;
     private float distance;
     private int direction = 1;
@@ -49,10 +52,30 @@ public class NPCSplineFollower : MonoBehaviour
             return;
         }
 
+        // The NPC is moved by this script, so physics must not move it too.
+        if (TryGetComponent(out Rigidbody rb) && !rb.isKinematic)
+        {
+            Debug.LogWarning($"{name}: non-kinematic Rigidbody found on the NPC. Setting it to kinematic.", this);
+            rb.isKinematic = true;
+        }
+
+        if (standOnSpline) feetOffset = CalculateFeetOffset();
+
         splineIndex = Mathf.Clamp(splineIndex, 0, path.Splines.Count - 1);
         splineLength = path.CalculateLength(splineIndex);
         distance = startOffset * splineLength;
         ApplyPosition(Normalized, snapRotation: true);
+    }
+
+    // Distance from the NPC's pivot down to the bottom of its visible model.
+    private float CalculateFeetOffset()
+    {
+        Renderer[] renderers = GetComponentsInChildren<Renderer>();
+        if (renderers.Length == 0) return 0f;
+
+        Bounds b = renderers[0].bounds;
+        for (int i = 1; i < renderers.Length; i++) b.Encapsulate(renderers[i].bounds);
+        return transform.position.y - b.min.y;
     }
 
     private float Normalized => splineLength > 0f ? Mathf.Clamp01(distance / splineLength) : 0f;
@@ -107,7 +130,7 @@ public class NPCSplineFollower : MonoBehaviour
     private void ApplyPosition(float t, bool snapRotation)
     {
         Vector3 pos = path.EvaluatePosition(splineIndex, t);
-        transform.position = pos + positionOffset;
+        transform.position = pos + Vector3.up * feetOffset + positionOffset;
 
         if (!faceMoveDirection) return;
 

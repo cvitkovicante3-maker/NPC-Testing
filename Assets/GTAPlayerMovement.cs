@@ -61,6 +61,15 @@ public class GTAPlayerMovement : MonoBehaviour
             rb.isKinematic = true;
         }
 
+        // The CharacterController is the player's collider. A second collider on the same
+        // object (e.g. the CapsuleCollider that comes with a default Capsule) causes pushing and launching.
+        foreach (Collider extra in GetComponents<Collider>())
+        {
+            if (extra is CharacterController || !extra.enabled) continue;
+            Debug.LogWarning($"GTAPlayerMovement: disabled extra {extra.GetType().Name} on the player. Remove it; the CharacterController is the collider.", this);
+            extra.enabled = false;
+        }
+
         moveAction = new InputAction("Move", InputActionType.Value);
         moveAction.AddCompositeBinding("2DVector")
             .With("Up", "<Keyboard>/w")
@@ -100,6 +109,7 @@ public class GTAPlayerMovement : MonoBehaviour
     private void Update()
     {
         float dt = Time.deltaTime;
+        KeepUpright();
         Vector2 input = moveAction.ReadValue<Vector2>();
         bool sprinting = sprintAction.IsPressed() && input.y > 0.1f;
 
@@ -126,5 +136,17 @@ public class GTAPlayerMovement : MonoBehaviour
 
         Vector3 velocity = transform.forward * currentSpeed + Vector3.up * verticalVelocity;
         controller.Move(velocity * dt);
+    }
+
+    // The player only ever turns around the Y axis; undo any tilt from outside influences.
+    private void KeepUpright()
+    {
+        Vector3 f = transform.forward;
+        f.y = 0f;
+        if (f.sqrMagnitude < 0.0001f) return;
+
+        Quaternion upright = Quaternion.LookRotation(f.normalized, Vector3.up);
+        if (Quaternion.Angle(transform.rotation, upright) > 0.01f)
+            transform.rotation = upright;
     }
 }
