@@ -54,6 +54,13 @@ public class GTAPlayerMovement : MonoBehaviour
     {
         controller = GetComponent<CharacterController>();
 
+        // Two movement scripts in one parent/child chain both move the character (double movement, wrong camera target).
+        foreach (GTAPlayerMovement other in FindObjectsByType<GTAPlayerMovement>(FindObjectsSortMode.None))
+        {
+            if (other != this && (other.transform.IsChildOf(transform) || transform.IsChildOf(other.transform)))
+                Debug.LogError($"GTAPlayerMovement on '{name}' and on '{other.name}' are in the same parent/child chain. Keep only ONE of them.", this);
+        }
+
         // A non-kinematic Rigidbody fights with the CharacterController (tilting, flying off).
         if (TryGetComponent(out Rigidbody rb) && !rb.isKinematic)
         {

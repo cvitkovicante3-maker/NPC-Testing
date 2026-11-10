@@ -42,6 +42,9 @@ public class GTAFollowCamera : MonoBehaviour
     [Tooltip("How long the camera takes to move back out after a wall stops blocking it.")]
     [SerializeField] private float collisionRecoverTime = 0.25f;
 
+    /// <summary>The object this camera follows (used by SetupDiagnostics).</summary>
+    public Transform Target => target;
+
     private readonly RaycastHit[] hitBuffer = new RaycastHit[16];
     private float yaw;
     private float yawVel;
@@ -52,6 +55,17 @@ public class GTAFollowCamera : MonoBehaviour
 
     private void Awake()
     {
+        // If the target isn't the object that actually moves, follow the child that does.
+        if (target != null && target.GetComponent<GTAPlayerMovement>() == null)
+        {
+            GTAPlayerMovement mover = target.GetComponentInChildren<GTAPlayerMovement>();
+            if (mover != null)
+            {
+                Debug.LogWarning($"GTAFollowCamera: '{target.name}' has no GTAPlayerMovement but its child '{mover.name}' does. Following '{mover.name}' instead.", this);
+                target = mover.transform;
+            }
+        }
+
         // A camera parented to the thing it follows causes runaway movement/jitter.
         if (target != null && transform.IsChildOf(target))
         {
