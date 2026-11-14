@@ -35,6 +35,12 @@ public class NPCDialogue : MonoBehaviour
     [Tooltip("The 'LLM Agent' on this object. Found automatically if it's on the same object.")]
     [SerializeField] private LLMUnity.LLMAgent agent;
 
+    [Header("Companion")]
+    [Tooltip("Add an NPCCompanion to the NPC. Found automatically if it's on the same object.")]
+    [SerializeField] private NPCCompanion companion;
+    [Tooltip("After the conversation ends, the NPC walks alongside the player.")]
+    [SerializeField] private bool followAfterConversation = true;
+
     [Header("Interaction")]
     [Tooltip("Leave empty to find the object with GTAPlayerMovement automatically.")]
     [SerializeField] private Transform player;
@@ -54,6 +60,7 @@ public class NPCDialogue : MonoBehaviour
     private bool talking, waiting, promptApplied;
     private string inputText = "";
     private string status = "";
+    private bool stayPut, pendingToggleStay;
 
     // --- UI state ---
     private bool pendingSend, pendingLeave, focusRequested;
@@ -86,6 +93,9 @@ public class NPCDialogue : MonoBehaviour
             Debug.LogWarning($"{name}: NPCDialogue needs an 'LLM Agent' component on this object.", this);
 
         follower = GetComponent<NPCSplineFollower>();
+        if (companion == null) companion = GetComponent<NPCCompanion>();
+        if (companion == null) companion = GetComponentInChildren<NPCCompanion>();
+        if (companion == null) companion = GetComponentInParent<NPCCompanion>();
 
         Debug.Log($"NPCDialogue ready on '{name}'. Player: {(player != null ? "'" + player.name + "'" : "NOT FOUND")}, " +
                   $"LLM Agent: {(agent != null ? "found" : "MISSING")}.", this);
@@ -110,6 +120,7 @@ public class NPCDialogue : MonoBehaviour
         // UI buttons only set flags; the real work happens here (IMGUI dislikes layout changes mid-frame)
         if (pendingSend) { pendingSend = false; SendPlayerMessage(); }
         if (pendingLeave) { pendingLeave = false; if (talking) EndTalking(); }
+        if (pendingToggleStay) { pendingToggleStay = false; ToggleStay(); }
 
         Keyboard kb = Keyboard.current;
         if (kb == null) return;
@@ -124,9 +135,13 @@ public class NPCDialogue : MonoBehaviour
         FacePlayer();
     }
 
+    // The object that physically walks around. Distance and facing are measured from here,
+    // so the prompt follows the mouse even if NPCDialogue sits on a different object.
+    private Transform Anchor => companion != null ? companion.transform : transform;
+
     private bool InRange()
     {
-        Vector3 d = player.position - transform.position;
+        Vector3 d = player.position - Anchor.position;
         d.y = 0f;
         return d.sqrMagnitude <= interactDistance * interactDistance;
     }
@@ -141,6 +156,7 @@ public class NPCDialogue : MonoBehaviour
 
         if (playerMovement != null) playerMovement.enabled = false;
         if (follower != null) { followerWasEnabled = follower.enabled; follower.enabled = false; }
+        if (companion != null) companion.SetPaused(true);
 
         if (speaksFirst && log.Count == 0 && !waiting)
             Say("(The player has just walked up to you. Greet them in character.)", visible: false);
@@ -151,15 +167,29 @@ public class NPCDialogue : MonoBehaviour
         talking = false;
         if (playerMovement != null) playerMovement.enabled = true;
         if (follower != null && followerWasEnabled) follower.enabled = true;
+
+        if (companion != null)
+        {
+            companion.SetPaused(false);
+            if (followAfterConversation && !stayPut && player != null) companion.StartFollowing(player);
+        }
     }
 
     private void FacePlayer()
     {
         if (!facePlayerWhileTalking) return;
-        Vector3 dir = player.position - transform.position;
+        Transform t = Anchor;
+        Vector3 dir = player.position - t.position;
         dir.y = 0f;
         if (dir.sqrMagnitude < 0.01f) return;
-        transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(dir), turnSpeed * Time.deltaTime);
+        t.rotation = Quaternion.Slerp(t.rotation, Quaternion.LookRotation(dir), turnSpeed * Time.deltaTime);
+    }
+
+    private void ToggleStay()
+    {
+        stayPut = !stayPut;
+        if (stayPut && companion != null) companion.StopFollowing();
+        // if the player chose "Follow me", following starts when the conversation ends
     }
 
     private void SendPlayerMessage()
@@ -247,7 +277,10 @@ public class NPCDialogue : MonoBehaviour
                "\n\nWhat you know about your world:\n" + worldNotes.Trim() +
                "\n\nYou are a character in a video game, talking with the player. Stay in character. " +
                "Keep replies short (one to three sentences) and natural, like speech. " +
-               "No stage directions, no asterisks, no emojis. Reply in the language the player writes in.";
+               "No stage directions, no asterisks, no emojis. Reply in the language the player writes in." +
+               (companion != null && followAfterConversation
+                   ? "\n\nWhen the conversation ends, you happily tag along beside the player as a travelling companion."
+                   : "");
     }
 
     // ------------------------------------------------------------------ UI
@@ -288,11 +321,12 @@ public class NPCDialogue : MonoBehaviour
         }
         else
         {
-            Vector3 d = player.position - transform.position;
+            Vector3 d = player.position - Anchor.position;
             d.y = 0f;
             info = "NPCDialogue on '" + name + "' | player '" + player.name + "' | distance " +
                    d.magnitude.ToString("F1") + " (talk range " + interactDistance.ToString("F1") + ") | key " +
-                   interactKey + " | LLM Agent: " + agentInfo;
+                   interactKey + " | LLM Agent: " + agentInfo +
+                   " | companion: " + (companion == null ? "none" : companion.IsFollowing ? "following" : "idle");
         }
 
         Color old = GUI.color;
@@ -346,6 +380,11 @@ public class NPCDialogue : MonoBehaviour
         inputText = GUILayout.TextField(inputText, 300, inputStyle, GUILayout.Height(36f));
 
         if (GUILayout.Button("Send", buttonStyle, GUILayout.Width(84f), GUILayout.Height(36f))) pendingSend = true;
+        if (companion != null && followAfterConversation)
+        {
+            if (GUILayout.Button(stayPut ? "Follow me" : "Stay here", buttonStyle, GUILayout.Width(116f), GUILayout.Height(36f)))
+                pendingToggleStay = true;
+        }
         if (GUILayout.Button("Leave", buttonStyle, GUILayout.Width(84f), GUILayout.Height(36f))) pendingLeave = true;
 
         GUILayout.EndHorizontal();
