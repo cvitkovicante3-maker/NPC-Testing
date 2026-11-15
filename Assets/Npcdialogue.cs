@@ -35,6 +35,10 @@ public class NPCDialogue : MonoBehaviour
     [Tooltip("The 'LLM Agent' on this object. Found automatically if it's on the same object.")]
     [SerializeField] private LLMUnity.LLMAgent agent;
 
+    [Header("Knowledge")]
+    [Tooltip("Optional. Add an NPCKnowledge component (with a JSON file) to give the NPC facts to draw on. Found automatically if it's on the same object.")]
+    [SerializeField] private NPCKnowledge knowledge;
+
     [Header("Companion")]
     [Tooltip("Add an NPCCompanion to the NPC. Found automatically if it's on the same object.")]
     [SerializeField] private NPCCompanion companion;
@@ -46,6 +50,8 @@ public class NPCDialogue : MonoBehaviour
     [SerializeField] private Transform player;
     [SerializeField] private Key interactKey = Key.E;
     [SerializeField] private float interactDistance = 4f;
+    [Tooltip("Talk range while the NPC is following you. It is larger so you can always talk to your companion.")]
+    [SerializeField] private float followingInteractDistance = 12f;
     [SerializeField] private bool facePlayerWhileTalking = true;
     [SerializeField] private float turnSpeed = 6f;
 
@@ -97,6 +103,10 @@ public class NPCDialogue : MonoBehaviour
         if (companion == null) companion = GetComponentInChildren<NPCCompanion>();
         if (companion == null) companion = GetComponentInParent<NPCCompanion>();
 
+        if (knowledge == null) knowledge = GetComponent<NPCKnowledge>();
+        if (knowledge == null) knowledge = GetComponentInChildren<NPCKnowledge>();
+        if (knowledge == null) knowledge = GetComponentInParent<NPCKnowledge>();
+
         Debug.Log($"NPCDialogue ready on '{name}'. Player: {(player != null ? "'" + player.name + "'" : "NOT FOUND")}, " +
                   $"LLM Agent: {(agent != null ? "found" : "MISSING")}.", this);
     }
@@ -139,11 +149,14 @@ public class NPCDialogue : MonoBehaviour
     // so the prompt follows the mouse even if NPCDialogue sits on a different object.
     private Transform Anchor => companion != null ? companion.transform : transform;
 
+    // How close the player must be to talk (larger while the NPC is following)
+    private float Range => (companion != null && companion.IsFollowing) ? followingInteractDistance : interactDistance;
+
     private bool InRange()
     {
         Vector3 d = player.position - Anchor.position;
         d.y = 0f;
-        return d.sqrMagnitude <= interactDistance * interactDistance;
+        return d.sqrMagnitude <= Range * Range;
     }
 
     private void BeginTalking()
@@ -216,7 +229,16 @@ public class NPCDialogue : MonoBehaviour
 
         waiting = true;
         status = "";
-        _ = AskAsync(text);
+
+        // Add the facts that match the player's question (if any) in front of their message
+        string query = text;
+        if (visible && knowledge != null)
+        {
+            string notes = knowledge.BuildContextFor(text);
+            if (notes.Length > 0) query = notes + "\n\n" + text;
+        }
+
+        _ = AskAsync(query);
     }
 
     private async Task AskAsync(string text)
@@ -270,11 +292,22 @@ public class NPCDialogue : MonoBehaviour
         return line;
     }
 
+    private string KnowledgeInstructions()
+    {
+        if (knowledge == null) return "";
+
+        string core = knowledge.GetAlwaysText();
+        return (core.Length > 0 ? "\n\nThings you know well:\n" + core : "") +
+               "\n\nSometimes the player's message starts with some notes in square brackets. Use them naturally " +
+               "to answer; never read them out and never mention that you were given notes. " +
+               "If neither your knowledge nor the notes cover a question, say you're not sure instead of inventing facts.";
+    }
+
     private string BuildSystemPrompt()
     {
         return persona.Trim() +
                "\n\nYour name is " + npcName + "." +
-               "\n\nWhat you know about your world:\n" + worldNotes.Trim() +
+               "\n\nWhat you know about your world:\n" + worldNotes.Trim() + KnowledgeInstructions() +
                "\n\nYou are a character in a video game, talking with the player. Stay in character. " +
                "Keep replies short (one to three sentences) and natural, like speech. " +
                "No stage directions, no asterisks, no emojis. Reply in the language the player writes in." +
@@ -324,7 +357,7 @@ public class NPCDialogue : MonoBehaviour
             Vector3 d = player.position - Anchor.position;
             d.y = 0f;
             info = "NPCDialogue on '" + name + "' | player '" + player.name + "' | distance " +
-                   d.magnitude.ToString("F1") + " (talk range " + interactDistance.ToString("F1") + ") | key " +
+                   d.magnitude.ToString("F1") + " (talk range " + Range.ToString("F1") + ") | key " +
                    interactKey + " | LLM Agent: " + agentInfo +
                    " | companion: " + (companion == null ? "none" : companion.IsFollowing ? "following" : "idle");
         }

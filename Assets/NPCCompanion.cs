@@ -35,6 +35,14 @@ public class NPCCompanion : MonoBehaviour
     [Tooltip("If the player gets farther than this, the NPC appears next to them.")]
     [SerializeField] private float teleportDistance = 30f;
 
+    [Header("Resting (when the player stops)")]
+    [Tooltip("Seconds the player must stand still before the NPC settles down and stops moving around.")]
+    [SerializeField] private float restDelay = 0.4f;
+    [Tooltip("While resting, the NPC stays exactly where it is as long as it is closer than this to the player. Keep it below your Interact Distance.")]
+    [SerializeField] private float restMaxDistance = 3.5f;
+    [Tooltip("Player speed (units/second) above which the player counts as moving.")]
+    [SerializeField] private float movingThreshold = 0.5f;
+
     [Header("Rotation")]
     [SerializeField] private float turnSpeed = 8f;
 
@@ -54,6 +62,7 @@ public class NPCCompanion : MonoBehaviour
     private Vector3 lastTargetPos;
     private Vector3 targetVelocity;
     private float verticalVelocity;
+    private float stillTimer;
     private float feetOffset;
     private float npcRadius = 0.3f;
     private float space;                       // personal space around the player, in world units
@@ -93,6 +102,7 @@ public class NPCCompanion : MonoBehaviour
         target = player;
         lastTargetPos = player.position;
         targetVelocity = Vector3.zero;
+        stillTimer = 0f;
 
         // Personal space: big enough for the player's body plus ours
         space = minPlayerDistance;
@@ -118,15 +128,13 @@ public class NPCCompanion : MonoBehaviour
         CurrentSpeed = 0f;
     }
 
-    /// <summary>Freezes the NPC in place (used while it is talking).</summary>
+    /// <summary>
+    /// Makes the NPC settle down and stay put (used while it is talking). It only moves if it is
+    /// too far from the player or too close to them.
+    /// </summary>
     public void SetPaused(bool value)
     {
         paused = value;
-        if (value)
-        {
-            velocity = Vector3.zero;
-            CurrentSpeed = 0f;
-        }
     }
 
     private void Update()
@@ -144,11 +152,9 @@ public class NPCCompanion : MonoBehaviour
         if (rawVelocity.magnitude > 40f) rawVelocity = Vector3.zero;   // ignore teleports
         targetVelocity = Vector3.Lerp(targetVelocity, rawVelocity, 1f - Mathf.Exp(-10f * dt));
 
-        if (paused)
-        {
-            CurrentSpeed = 0f;
-            return;
-        }
+        // The player counts as "still" after standing quietly for a moment
+        stillTimer = targetVelocity.magnitude > movingThreshold ? 0f : stillTimer + dt;
+        bool resting = paused || stillTimer >= restDelay;
 
         // The spot beside the player where the NPC wants to be
         Vector3 right = Vector3.ProjectOnPlane(target.right, Vector3.up).normalized;
@@ -171,10 +177,19 @@ public class NPCCompanion : MonoBehaviour
             return;
         }
 
-        // Match the player's speed, plus a push toward the spot to close any gap
-        Vector3 desired = Vector3.zero;
-        if (!(distance < stopDistance && targetVelocity.magnitude < 0.3f))
-            desired = targetVelocity + toGoal * catchUpGain;
+        Vector3 desired;
+        if (resting)
+        {
+            // Player is standing still: don't wander around, just stay where we are
+            desired = RestingVelocity();
+        }
+        else
+        {
+            // Match the player's speed, plus a push toward the spot to close any gap
+            desired = Vector3.zero;
+            if (!(distance < stopDistance && targetVelocity.magnitude < 0.3f))
+                desired = targetVelocity + toGoal * catchUpGain;
+        }
 
         // Never head INTO the player: turn that speed into walking around them
         Vector3 toPlayer = target.position - transform.position;
@@ -203,6 +218,29 @@ public class NPCCompanion : MonoBehaviour
 
         Move(step, dt);
         Rotate(dt);
+    }
+
+    // While the player stands still: do nothing, unless the NPC is too far away or too close.
+    private Vector3 RestingVelocity()
+    {
+        Vector3 toPlayer = target.position - transform.position;
+        toPlayer.y = 0f;
+        float d = toPlayer.magnitude;
+        if (d < 0.001f) return Vector3.zero;
+
+        float minD = space + 0.6f;
+        float maxD = Mathf.Max(restMaxDistance, minD + 1f);
+        Vector3 dirToPlayer = toPlayer / d;
+
+        float wantedDistance;
+        if (d > maxD) wantedDistance = maxD - 0.7f;          // too far: come a bit closer
+        else if (d < minD) wantedDistance = minD + 0.4f;     // too close: step back
+        else return Vector3.zero;                            // comfortable: stay put
+
+        Vector3 spot = target.position - dirToPlayer * wantedDistance;
+        Vector3 toSpot = spot - transform.position;
+        toSpot.y = 0f;
+        return toSpot * catchUpGain;
     }
 
     // Final safety net: the NPC may never end a frame inside the player's personal space.
