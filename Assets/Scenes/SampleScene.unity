@@ -382,6 +382,7 @@ MonoBehaviour:
   persona: 'You are a small, curious village mouse with a big heart. You are friendly, a little shy at first, and quickly become chatty and playful once you like someone. You are always hungry for crumbs, you see the world from very low down, and you notice small things people miss. You are loyal: once you have met the player, you gladly tag along beside them as a travelling companion. You are respectful and warm, never rude, and you never make fun of anyone''s beliefs.'
   worldNotes: "You live in the village of Me\u0111ugorje in Herzegovina, in a valley between two hills: Podbrdo (Apparition Hill) and Kri\u017Eevac (Cross Mountain). You have lived here all your life, scurrying around the church of St. James, the guesthouses, the vineyards and the paths up the hills. You have met pilgrims and visitors from all over the world, and you love telling newcomers about the village, its walks, its food and its history. You are not a priest or an official guide. When asked about faith, you share only what you have heard from pilgrims and what the Church has said, and you never push an opinion. The player is a visitor exploring the village. You know nothing about the world beyond what travellers have told you. "
   speaksFirst: 1
+  askLanguageEveryTime: 1
   agent: {fileID: 0}
   knowledge: {fileID: 0}
   companion: {fileID: 0}
@@ -407,6 +408,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::NPCKnowledge
   knowledgeFiles:
   - {fileID: 4900000, guid: fc694409e34addc4bb7cddfb71a2ca12, type: 3}
+  croatianKnowledgeFiles:
+  - {fileID: 4900000, guid: df6210d82e6a7304ba55848950666ade, type: 3}
   maxFactsPerMessage: 2
   reusePreviousForFollowUps: 1
   logMatches: 0
@@ -1478,7 +1481,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 919132149155446097, guid: a08df360d734c4043b496ce77812d2d6, type: 3}
       propertyPath: m_Name
-      value: Brick_House_2.79
+      value: Boba Hotel
       objectReference: {fileID: 0}
     - target: {fileID: 919132149155446097, guid: a08df360d734c4043b496ce77812d2d6, type: 3}
       propertyPath: m_StaticEditorFlags
@@ -1502,7 +1505,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: 100000, guid: 28d592096e7e76148945c98658a6c011, type: 3}
       propertyPath: m_Name
-      value: House_1
+      value: Boba Hotel
       objectReference: {fileID: 0}
     - target: {fileID: 400000, guid: 28d592096e7e76148945c98658a6c011, type: 3}
       propertyPath: m_LocalPosition.x

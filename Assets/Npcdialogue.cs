@@ -5,8 +5,9 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// Lets the player walk up to this NPC and chat with it. Replies come from a free, local model
-/// (the "LLM for Unity" package), so nothing is pre-written and nothing needs the internet.
+/// Lets the player walk up to this NPC and chat with it, in English or Croatian.
+/// Walk close and a prompt appears; press E, pick a language, and talk. Replies come from a free,
+/// local model (the "LLM for Unity" package), so nothing is pre-written and nothing needs the internet.
 ///
 /// Needs on this object: an "LLM Agent" component. Somewhere in the scene: an "LLM" component
 /// with a downloaded model. The UI is drawn with Unity's built-in IMGUI (no Canvas needed).
@@ -31,12 +32,16 @@ public class NPCDialogue : MonoBehaviour
     [Tooltip("The NPC greets the player first when the conversation starts.")]
     [SerializeField] private bool speaksFirst = true;
 
+    [Header("Language")]
+    [Tooltip("Ask for English or Croatian every time a conversation starts. If off, the first choice is remembered (the 'Language' button in the chat can still change it).")]
+    [SerializeField] private bool askLanguageEveryTime = false;
+
     [Header("AI")]
     [Tooltip("The 'LLM Agent' on this object. Found automatically if it's on the same object.")]
     [SerializeField] private LLMUnity.LLMAgent agent;
 
     [Header("Knowledge")]
-    [Tooltip("Optional. Add an NPCKnowledge component (with a JSON file) to give the NPC facts to draw on. Found automatically if it's on the same object.")]
+    [Tooltip("Optional. Add an NPCKnowledge component (with JSON files) to give the NPC facts to draw on. Found automatically if it's on the same object.")]
     [SerializeField] private NPCKnowledge knowledge;
 
     [Header("Companion")]
@@ -57,7 +62,7 @@ public class NPCDialogue : MonoBehaviour
 
     [Header("Troubleshooting")]
     [Tooltip("Shows a yellow status line at the top-left of the Game view. Turn off once everything works.")]
-    [SerializeField] private bool showDebugInfo = true;
+    [SerializeField] private bool showDebugInfo = false;
 
     // --- conversation state ---
     private readonly List<Line> log = new List<Line>();
@@ -68,13 +73,21 @@ public class NPCDialogue : MonoBehaviour
     private string status = "";
     private bool stayPut, pendingToggleStay;
 
+    // --- language state ---
+    private DialogueLanguage language = DialogueLanguage.English;
+    private bool languageChosen;
+    private bool selectingLanguage;
+    private bool sendCoreNotes;                 // send the NPC's background facts with the next message
+    private int pendingLanguage = -1;           // set by buttons / keys, applied in Update
+    private bool pendingChooseLanguage;
+
     // --- UI state ---
     private bool pendingSend, pendingLeave, focusRequested;
     private float openedTime;
     private Vector2 scroll;
     private int scrollFrames;
     private GUIStyle boxStyle, promptStyle, nameStyle, npcLineStyle, playerLineStyle, thinkStyle,
-                     statusStyle, inputStyle, buttonStyle;
+                     statusStyle, inputStyle, buttonStyle, bigButtonStyle;
     private Texture2D panelTex;
 
     // --- things we pause while talking ---
@@ -121,6 +134,12 @@ public class NPCDialogue : MonoBehaviour
         if (panelTex != null) Destroy(panelTex);
     }
 
+    // Picks the English or Croatian text, depending on the language the player chose
+    private string T(string english, string croatian)
+    {
+        return language == DialogueLanguage.Croatian ? croatian : english;
+    }
+
     // ---------------------------------------------------------------- logic
 
     private void Update()
@@ -131,6 +150,13 @@ public class NPCDialogue : MonoBehaviour
         if (pendingSend) { pendingSend = false; SendPlayerMessage(); }
         if (pendingLeave) { pendingLeave = false; if (talking) EndTalking(); }
         if (pendingToggleStay) { pendingToggleStay = false; ToggleStay(); }
+        if (pendingChooseLanguage) { pendingChooseLanguage = false; if (talking) selectingLanguage = true; }
+        if (pendingLanguage >= 0)
+        {
+            int chosen = pendingLanguage;
+            pendingLanguage = -1;
+            if (talking) ApplyLanguage(chosen == 1 ? DialogueLanguage.Croatian : DialogueLanguage.English);
+        }
 
         Keyboard kb = Keyboard.current;
         if (kb == null) return;
@@ -142,6 +168,13 @@ public class NPCDialogue : MonoBehaviour
         }
 
         if (kb.escapeKey.wasPressedThisFrame) { EndTalking(); return; }
+
+        if (selectingLanguage)
+        {
+            if (kb.digit1Key.wasPressedThisFrame) pendingLanguage = 0;
+            else if (kb.digit2Key.wasPressedThisFrame) pendingLanguage = 1;
+        }
+
         FacePlayer();
     }
 
@@ -171,13 +204,22 @@ public class NPCDialogue : MonoBehaviour
         if (follower != null) { followerWasEnabled = follower.enabled; follower.enabled = false; }
         if (companion != null) companion.SetPaused(true);
 
-        if (speaksFirst && log.Count == 0 && !waiting)
-            Say("(The player has just walked up to you. Greet them in character.)", visible: false);
+        // First ask which language to talk in (unless it was chosen before and we should remember it)
+        if (askLanguageEveryTime || !languageChosen)
+        {
+            selectingLanguage = true;
+        }
+        else
+        {
+            sendCoreNotes = true;
+            StartConversation();
+        }
     }
 
     private void EndTalking()
     {
         talking = false;
+        selectingLanguage = false;
         if (playerMovement != null) playerMovement.enabled = true;
         if (follower != null && followerWasEnabled) follower.enabled = true;
 
@@ -186,6 +228,28 @@ public class NPCDialogue : MonoBehaviour
             companion.SetPaused(false);
             if (followAfterConversation && !stayPut && player != null) companion.StartFollowing(player);
         }
+    }
+
+    // The player picked a language: switch to it and (the first time) let the NPC greet them
+    private void ApplyLanguage(DialogueLanguage chosen)
+    {
+        language = chosen;
+        languageChosen = true;
+        selectingLanguage = false;
+        sendCoreNotes = true;
+        status = "";
+        openedTime = Time.unscaledTime;
+        focusRequested = true;
+        scrollFrames = 3;
+
+        StartConversation();
+    }
+
+    private void StartConversation()
+    {
+        if (speaksFirst && log.Count == 0 && !waiting)
+            Say(T("(The player has just walked up to you. Greet them in character.)",
+                  "(Igrač ti se upravo približio. Pozdravi ga u svojoj ulozi.)"), visible: false);
     }
 
     private void FacePlayer()
@@ -208,7 +272,7 @@ public class NPCDialogue : MonoBehaviour
     private void SendPlayerMessage()
     {
         string text = inputText.Trim();
-        if (text.Length == 0 || waiting) return;
+        if (text.Length == 0 || waiting || selectingLanguage) return;
         inputText = "";
         focusRequested = true;
         Say(text, visible: true);
@@ -218,7 +282,8 @@ public class NPCDialogue : MonoBehaviour
     {
         if (agent == null)
         {
-            status = "No 'LLM Agent' component found on this object. Add one to the mouse.";
+            status = T("No 'LLM Agent' component found on this object. Add one to the mouse.",
+                       "Na ovom objektu nema komponente 'LLM Agent'. Dodaj je mišu.");
             if (visible) inputText = text;
             return;
         }
@@ -230,15 +295,24 @@ public class NPCDialogue : MonoBehaviour
         waiting = true;
         status = "";
 
-        // Add the facts that match the player's question (if any) in front of their message
-        string query = text;
-        if (visible && knowledge != null)
+        // Every message starts with the language to reply in, then the facts that match the question
+        string query = LanguageTag() + "\n";
+        if (knowledge != null)
         {
-            string notes = knowledge.BuildContextFor(text);
-            if (notes.Length > 0) query = notes + "\n\n" + text;
+            string notes = knowledge.BuildContextFor(visible ? text : "", language, sendCoreNotes);
+            if (notes.Length > 0) query += notes + "\n\n";
         }
+        sendCoreNotes = false;
+        query += text;
 
         _ = AskAsync(query);
+    }
+
+    private string LanguageTag()
+    {
+        return language == DialogueLanguage.Croatian
+            ? "[Reply in Croatian. Odgovori na hrvatskom jeziku.]"
+            : "[Reply in English.]";
     }
 
     private async Task AskAsync(string text)
@@ -255,12 +329,14 @@ public class NPCDialogue : MonoBehaviour
             string reply = await agent.Chat(text);
             reply = reply == null ? "" : reply.Trim();
 
-            if (reply.Length == 0) OnError("The local model returned an empty reply.");
+            if (reply.Length == 0) OnError(T("The local model returned an empty reply.",
+                                             "Lokalni model je vratio prazan odgovor."));
             else OnReply(reply);
         }
         catch (Exception e)
         {
-            OnError("The local model isn't ready or failed (it may still be loading): " + e.Message);
+            OnError(T("The local model isn't ready or failed (it may still be loading): ",
+                      "Lokalni model nije spreman ili je zakazao (možda se još učitava): ") + e.Message);
         }
     }
 
@@ -282,6 +358,7 @@ public class NPCDialogue : MonoBehaviour
         if (lastPlayerText != null && inputText.Length == 0) inputText = lastPlayerText;
         lastPlayerLine = null;
         lastPlayerText = null;
+        sendCoreNotes = true;   // the background facts may not have arrived, send them again
     }
 
     private Line AddLine(bool fromPlayer, string text)
@@ -296,9 +373,7 @@ public class NPCDialogue : MonoBehaviour
     {
         if (knowledge == null) return "";
 
-        string core = knowledge.GetAlwaysText();
-        return (core.Length > 0 ? "\n\nThings you know well:\n" + core : "") +
-               "\n\nSometimes the player's message starts with some notes in square brackets. Use them naturally " +
+        return "\n\nSometimes the player's message contains some notes in square brackets. Use them naturally " +
                "to answer; never read them out and never mention that you were given notes. " +
                "If neither your knowledge nor the notes cover a question, say you're not sure instead of inventing facts.";
     }
@@ -310,7 +385,10 @@ public class NPCDialogue : MonoBehaviour
                "\n\nWhat you know about your world:\n" + worldNotes.Trim() + KnowledgeInstructions() +
                "\n\nYou are a character in a video game, talking with the player. Stay in character. " +
                "Keep replies short (one to three sentences) and natural, like speech. " +
-               "No stage directions, no asterisks, no emojis. Reply in the language the player writes in." +
+               "No stage directions, no asterisks, no emojis. " +
+               "Every player message begins with a note in square brackets saying which language to reply in " +
+               "(English or Croatian). Always reply in that language, even if earlier messages used another one. " +
+               "When you reply in Croatian, use simple, natural standard Croatian." +
                (companion != null && followAfterConversation
                    ? "\n\nWhen the conversation ends, you happily tag along beside the player as a travelling companion."
                    : "");
@@ -333,8 +411,18 @@ public class NPCDialogue : MonoBehaviour
 
         if (!talking)
         {
-            var r = new Rect(vw / 2f - 190f, vh - 90f, 380f, 44f);
-            GUI.Box(r, "Press " + interactKey + " to talk to " + npcName, promptStyle);
+            // Before a language has been chosen the prompt is just the key and the name; afterwards it is
+            // written only in the chosen language.
+            string prompt = languageChosen
+                ? T("Press " + interactKey + " to talk", "Pritisni " + interactKey + " za razgovor")
+                : "[" + interactKey + "]   " + npcName;
+
+            var r = new Rect(vw / 2f - 220f, vh - 90f, 440f, 44f);
+            GUI.Box(r, prompt, promptStyle);
+        }
+        else if (selectingLanguage)
+        {
+            DrawLanguageChoice(vw, vh);
         }
         else
         {
@@ -347,6 +435,7 @@ public class NPCDialogue : MonoBehaviour
     private void DrawDebugInfo()
     {
         string agentInfo = agent != null ? "found" : "MISSING";
+        string languageInfo = languageChosen ? language.ToString() : "not chosen yet";
         string info;
         if (player == null)
         {
@@ -358,7 +447,7 @@ public class NPCDialogue : MonoBehaviour
             d.y = 0f;
             info = "NPCDialogue on '" + name + "' | player '" + player.name + "' | distance " +
                    d.magnitude.ToString("F1") + " (talk range " + Range.ToString("F1") + ") | key " +
-                   interactKey + " | LLM Agent: " + agentInfo +
+                   interactKey + " | LLM Agent: " + agentInfo + " | language: " + languageInfo +
                    " | companion: " + (companion == null ? "none" : companion.IsFollowing ? "following" : "idle");
         }
 
@@ -368,11 +457,32 @@ public class NPCDialogue : MonoBehaviour
         GUI.color = old;
     }
 
+    private void DrawLanguageChoice(float vw, float vh)
+    {
+        float w = Mathf.Min(520f, vw - 40f);
+        float h = 150f;
+        var panel = new Rect((vw - w) / 2f, vh - h - 24f, w, h);
+        GUI.Box(panel, GUIContent.none, boxStyle);
+
+        GUILayout.BeginArea(new Rect(panel.x + 18f, panel.y + 12f, panel.width - 36f, panel.height - 24f));
+
+        GUILayout.Label(npcName, nameStyle);
+        GUILayout.Space(6f);
+
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("English   [1]", bigButtonStyle, GUILayout.Height(52f))) pendingLanguage = 0;
+        GUILayout.Space(10f);
+        if (GUILayout.Button("Hrvatski   [2]", bigButtonStyle, GUILayout.Height(52f))) pendingLanguage = 1;
+        GUILayout.EndHorizontal();
+
+        GUILayout.EndArea();
+    }
+
     private void DrawDialogue(float vw, float vh)
     {
         Event e = Event.current;
 
-        float w = Mathf.Min(780f, vw - 40f);
+        float w = Mathf.Min(820f, vw - 40f);
         float h = 310f;
         var panel = new Rect((vw - w) / 2f, vh - h - 24f, w, h);
         GUI.Box(panel, GUIContent.none, boxStyle);
@@ -390,10 +500,10 @@ public class NPCDialogue : MonoBehaviour
         scroll = GUILayout.BeginScrollView(scroll, GUILayout.ExpandHeight(true));
         foreach (Line l in log)
         {
-            string who = l.fromPlayer ? "You: " : npcName + ": ";
+            string who = l.fromPlayer ? T("You: ", "Ti: ") : npcName + ": ";
             GUILayout.Label(who + l.text, l.fromPlayer ? playerLineStyle : npcLineStyle);
         }
-        if (waiting) GUILayout.Label(npcName + " is thinking...", thinkStyle);
+        if (waiting) GUILayout.Label(npcName + T(" is thinking...", " razmišlja..."), thinkStyle);
         GUILayout.EndScrollView();
 
         if (status.Length > 0) GUILayout.Label(status, statusStyle);
@@ -406,19 +516,21 @@ public class NPCDialogue : MonoBehaviour
                      && GUI.GetNameOfFocusedControl() == "ChatInput";
         if (enter) { pendingSend = true; e.Use(); }
 
-        // ignore the "E" that opened the dialogue so it isn't typed into the box
+        // ignore the key that opened the dialogue so it isn't typed into the box
         if (Time.unscaledTime < openedTime + 0.2f) inputText = "";
 
         GUI.SetNextControlName("ChatInput");
         inputText = GUILayout.TextField(inputText, 300, inputStyle, GUILayout.Height(36f));
 
-        if (GUILayout.Button("Send", buttonStyle, GUILayout.Width(84f), GUILayout.Height(36f))) pendingSend = true;
+        if (GUILayout.Button(T("Send", "Pošalji"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingSend = true;
+        if (GUILayout.Button(T("Language", "Jezik"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingChooseLanguage = true;
         if (companion != null && followAfterConversation)
         {
-            if (GUILayout.Button(stayPut ? "Follow me" : "Stay here", buttonStyle, GUILayout.Width(116f), GUILayout.Height(36f)))
+            string stayLabel = stayPut ? T("Follow me", "Prati me") : T("Stay here", "Ostani ovdje");
+            if (GUILayout.Button(stayLabel, buttonStyle, GUILayout.Width(130f), GUILayout.Height(36f)))
                 pendingToggleStay = true;
         }
-        if (GUILayout.Button("Leave", buttonStyle, GUILayout.Width(84f), GUILayout.Height(36f))) pendingLeave = true;
+        if (GUILayout.Button(T("Leave", "Zatvori"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingLeave = true;
 
         GUILayout.EndHorizontal();
         GUILayout.EndArea();
@@ -478,5 +590,6 @@ public class NPCDialogue : MonoBehaviour
 
         inputStyle = new GUIStyle(GUI.skin.textField) { fontSize = 18, alignment = TextAnchor.MiddleLeft };
         buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 17 };
+        bigButtonStyle = new GUIStyle(GUI.skin.button) { fontSize = 22, fontStyle = FontStyle.Bold };
     }
 }
