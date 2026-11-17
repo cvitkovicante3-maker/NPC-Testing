@@ -79,6 +79,10 @@ public class NPCDialogue : MonoBehaviour
     [Tooltip("After the conversation ends, the NPC walks alongside the player.")]
     [SerializeField] private bool followAfterConversation = true;
 
+    [Header("Navigation (leading the player to places)")]
+    [Tooltip("When the player asks where a marked place is (see NPCDestination), the NPC offers to lead the way. Needs an NPCCompanion.")]
+    [SerializeField] private bool offerNavigation = true;
+
     [Header("Interaction")]
     [Tooltip("Leave empty to find the object with GTAPlayerMovement automatically.")]
     [SerializeField] private Transform player;
@@ -101,6 +105,17 @@ public class NPCDialogue : MonoBehaviour
     private string inputText = "";
     private string status = "";
     private bool stayPut, pendingToggleStay;
+
+    // --- navigation state ---
+    private NPCDestination pendingOffer;        // the place the player asked about (waiting for the NPC's reply)
+    private NPCDestination activeOffer;         // the place being offered right now
+    private bool offering;                      // showing the Yes / No buttons
+    private int pendingOfferChoice = -1;        // 0 = yes, 1 = no (set by buttons / keys)
+    private NPCDestination guidingTo;           // where the NPC is leading the player
+    private NPCDestination lastPlace;           // the last place the player asked about ("take me there")
+    private float startGuideAt = -1f;           // a direct "take me there" order: the guide starts at this time
+    private string arrivedName = "";
+    private float arrivedUntil;
 
     // --- language state ---
     private DialogueLanguage language = DialogueLanguage.English;
@@ -187,6 +202,22 @@ public class NPCDialogue : MonoBehaviour
         if (pendingSend) { pendingSend = false; SendPlayerMessage(); }
         if (pendingLeave) { pendingLeave = false; if (talking) EndTalking(); }
         if (pendingToggleStay) { pendingToggleStay = false; ToggleStay(); }
+        if (pendingOfferChoice >= 0)
+        {
+            int choice = pendingOfferChoice;
+            pendingOfferChoice = -1;
+            if (talking && offering)
+            {
+                if (choice == 0) AcceptOffer();
+                else DeclineOffer();
+            }
+        }
+        if (startGuideAt >= 0f && Time.unscaledTime >= startGuideAt)
+        {
+            startGuideAt = -1f;
+            if (talking && activeOffer != null) AcceptOffer();
+        }
+        if (guidingTo != null && (companion == null || !companion.IsGuiding)) guidingTo = null;   // guiding ended
         if (pendingChooseLanguage) { pendingChooseLanguage = false; if (talking) selectingLanguage = true; }
         if (pendingLanguage >= 0)
         {
@@ -210,6 +241,12 @@ public class NPCDialogue : MonoBehaviour
         {
             if (kb.digit1Key.wasPressedThisFrame) pendingLanguage = 0;
             else if (kb.digit2Key.wasPressedThisFrame) pendingLanguage = 1;
+        }
+
+        if (offering)
+        {
+            if (kb.digit1Key.wasPressedThisFrame) pendingOfferChoice = 0;
+            else if (kb.digit2Key.wasPressedThisFrame) pendingOfferChoice = 1;
         }
 
         FacePlayer();
@@ -252,6 +289,10 @@ public class NPCDialogue : MonoBehaviour
     {
         talking = false;
         selectingLanguage = false;
+        offering = false;
+        pendingOffer = null;
+        activeOffer = null;
+        startGuideAt = -1f;
         if (playerMovement != null) playerMovement.enabled = true;
         if (follower != null && followerWasEnabled) follower.enabled = true;
 
@@ -278,6 +319,9 @@ public class NPCDialogue : MonoBehaviour
 
         if (changed)
         {
+            offering = false;
+            pendingOffer = null;
+            activeOffer = null;
             log.Clear();
             lastPlayerLine = null;
             lastPlayerText = null;
@@ -315,7 +359,7 @@ public class NPCDialogue : MonoBehaviour
     private void SendPlayerMessage()
     {
         string text = inputText.Trim();
-        if (text.Length == 0 || waiting || selectingLanguage) return;
+        if (text.Length == 0 || waiting || selectingLanguage || offering) return;
         inputText = "";
         focusRequested = true;
         Say(text, visible: true);
@@ -330,6 +374,9 @@ public class NPCDialogue : MonoBehaviour
             if (visible) inputText = text;
             return;
         }
+
+        // "Take me to the church": an order. No need to ask the model; the mouse answers and leads the way.
+        if (visible && TryDirectGuide(text)) return;
 
         lastPlayerLine = null;
         lastPlayerText = visible ? text : null;
@@ -348,10 +395,107 @@ public class NPCDialogue : MonoBehaviour
             string notes = knowledge.BuildContextFor(visible ? text : "", language, sendBriefing);
             if (notes.Length > 0) query += notes + "\n\n";
         }
+        if (visible) query += NavigationNote(text);
         sendBriefing = false;
         query += text + "\n\n" + LanguageReminder();
 
         _ = AskAsync(query);
+    }
+
+    // ------------------------------------------------------------- navigation
+
+    // If the player asks where something is, tell the model what it knows. A known place becomes an offer
+    // (the Yes / No buttons appear after the NPC's reply); an unknown place is answered honestly.
+    // The place a message is about: named in it, or (for "there", "tamo", "again") the one asked about before
+    private NPCDestination PlaceFor(string text)
+    {
+        NPCDestination place = NPCDestination.FindInMessage(text);
+        if (place == null && lastPlace != null && NPCDestination.RefersToPreviousPlace(text)) place = lastPlace;
+        return place;
+    }
+
+    // A direct order to be led somewhere. Replies with a fixed line, then starts guiding a moment later.
+    private bool TryDirectGuide(string text)
+    {
+        if (!offerNavigation || companion == null || NPCDestination.All.Count == 0) return false;
+        if (!NPCDestination.LooksLikeDirectCommand(text)) return false;
+
+        NPCDestination place = PlaceFor(text);
+        if (place == null) return false;   // no known place named: let the model answer normally
+
+        lastPlace = place;
+        pendingOffer = null;
+        offering = false;
+        activeOffer = place;
+        lastPlayerLine = null;
+        lastPlayerText = null;
+
+        AddLine(true, text);
+        string name = place.NameFor(language);
+        AddLine(false, T("Of course! Follow me to " + name + ".", "Naravno! Slijedi me do: " + name + "."));
+        startGuideAt = Time.unscaledTime + 1.2f;   // long enough to read the answer
+        return true;
+    }
+
+    private string NavigationNote(string text)
+    {
+        pendingOffer = null;
+        if (!offerNavigation || companion == null || NPCDestination.All.Count == 0) return "";
+        if (!NPCDestination.LooksLikeDirectionsRequest(text) && !NPCDestination.LooksLikeDirectCommand(text)) return "";
+
+        bool hr = language == DialogueLanguage.Croatian;
+        NPCDestination place = PlaceFor(text);
+
+        if (place != null)
+        {
+            lastPlace = place;
+            pendingOffer = place;
+            string name = place.NameFor(language);
+            return hr
+                ? "[Igrač pita gdje je: " + name + ". Točno znaš gdje je. U jednoj do dvije kratke rečenice reci da znaš gdje je i ponudi da ga odvedeš tamo, pa pitaj želi li da ga povedeš. Ne daj upute za put.]\n\n"
+                : "[The player asked where this place is: " + name + ". You know exactly where it is. In one or two short sentences, say that you know where it is and offer to take them there, then ask whether they would like you to lead the way. Do not give directions.]\n\n";
+        }
+
+        string known = NPCDestination.NamesFor(language);
+        return hr
+            ? "[Igrač pita gdje je neko mjesto, ali ne znaš mjesto s tim imenom. Reci da ne znaš gdje je to. Mjesta do kojih možeš odvesti igrača: " + known + ".]\n\n"
+            : "[The player asked where a place is, but you don't know a place by that name. Say you don't know where that is. Places you can take the player to: " + known + ".]\n\n";
+    }
+
+    // "Yes": close the chat and start leading the way
+    private void AcceptOffer()
+    {
+        NPCDestination place = activeOffer;
+        offering = false;
+        activeOffer = null;
+        if (place == null || companion == null) return;
+
+        bool followAfter = followAfterConversation && !stayPut;
+        guidingTo = place;
+
+        EndTalking();   // gives the player control back
+        companion.StartGuiding(player, place.transform.position, place.ArriveDistance, followAfter, OnGuideArrived);
+    }
+
+    // "No": the NPC stays where it is and the conversation goes on
+    private void DeclineOffer()
+    {
+        offering = false;
+        activeOffer = null;
+        focusRequested = true;
+
+        AddLine(true, T("No, thanks.", "Ne, hvala."));
+        Say(T("(The player declined your offer to lead them there. Reply in one short, friendly sentence and say you are right here if they need anything.)",
+              "(Igrač je odbio tvoju ponudu da ga odvedeš. Odgovori jednom kratkom prijateljskom rečenicom i reci da si tu ako mu išta zatreba.)"),
+            visible: false);
+    }
+
+    private void OnGuideArrived()
+    {
+        if (this == null) return;
+        arrivedName = guidingTo != null ? guidingTo.NameFor(language) : "";
+        arrivedUntil = Time.time + 5f;
+        guidingTo = null;
     }
 
     // Short tag at the start of every message, written in the language to answer in
@@ -409,6 +553,17 @@ public class NPCDialogue : MonoBehaviour
     {
         if (this == null) return;
         waiting = false;
+
+        // The player asked where a known place is: after the NPC's offer, show the Yes / No buttons
+        if (pendingOffer != null)
+        {
+            activeOffer = pendingOffer;
+            pendingOffer = null;
+            offering = true;
+            if (!reply.Contains("?"))
+                reply += T(" Shall I take you there?", " Želiš li da te odvedem tamo?");
+        }
+
         AddLine(false, reply);
     }
 
@@ -416,6 +571,7 @@ public class NPCDialogue : MonoBehaviour
     {
         if (this == null) return;
         waiting = false;
+        pendingOffer = null;
         status = error;
 
         // Undo the failed message so the player can simply try again
@@ -582,6 +738,7 @@ public class NPCDialogue : MonoBehaviour
     {
         if (showDebugInfo) DrawDebugInfo();
         if (player == null) return;
+        DrawGuideBanner();
         if (!talking && !InRange()) return;
 
         EnsureStyles();
@@ -611,6 +768,23 @@ public class NPCDialogue : MonoBehaviour
             DrawDialogue(vw, vh);
         }
 
+        GUI.matrix = Matrix4x4.identity;
+    }
+
+    // A line at the top of the screen while the NPC is leading the way, and for a moment after arriving
+    private void DrawGuideBanner()
+    {
+        string message = null;
+        if (guidingTo != null) message = T("On the way to: ", "Na putu do: ") + guidingTo.NameFor(language);
+        else if (Time.time < arrivedUntil && arrivedName.Length > 0) message = T("You have arrived: ", "Stigli ste: ") + arrivedName;
+        if (message == null) return;
+
+        EnsureStyles();
+        float s = Screen.height / 720f;
+        GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(s, s, 1f));
+        float vw = Screen.width / s;
+
+        GUI.Box(new Rect(vw / 2f - 260f, 44f, 520f, 44f), message, promptStyle);
         GUI.matrix = Matrix4x4.identity;
     }
 
@@ -693,31 +867,44 @@ public class NPCDialogue : MonoBehaviour
 
         if (status.Length > 0) GUILayout.Label(status, statusStyle);
 
-        // input row
-        GUILayout.BeginHorizontal();
-
-        bool enter = e.type == EventType.KeyDown
-                     && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
-                     && GUI.GetNameOfFocusedControl() == "ChatInput";
-        if (enter) { pendingSend = true; e.Use(); }
-
-        // ignore the key that opened the dialogue so it isn't typed into the box
-        if (Time.unscaledTime < openedTime + 0.2f) inputText = "";
-
-        GUI.SetNextControlName("ChatInput");
-        inputText = GUILayout.TextField(inputText, 300, inputStyle, GUILayout.Height(36f));
-
-        if (GUILayout.Button(T("Send", "Pošalji"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingSend = true;
-        if (GUILayout.Button(T("Language", "Jezik"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingChooseLanguage = true;
-        if (companion != null && followAfterConversation)
+        // input row (or the Yes / No question after the NPC offered to lead the way)
+        if (offering)
         {
-            string stayLabel = stayPut ? T("Follow me", "Prati me") : T("Stay here", "Ostani ovdje");
-            if (GUILayout.Button(stayLabel, buttonStyle, GUILayout.Width(130f), GUILayout.Height(36f)))
-                pendingToggleStay = true;
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(T("Yes, lead the way   [1]", "Da, vodi me   [1]"), buttonStyle, GUILayout.Height(46f)))
+                pendingOfferChoice = 0;
+            GUILayout.Space(10f);
+            if (GUILayout.Button(T("No, thanks   [2]", "Ne, hvala   [2]"), buttonStyle, GUILayout.Height(46f)))
+                pendingOfferChoice = 1;
+            GUILayout.EndHorizontal();
         }
-        if (GUILayout.Button(T("Leave", "Zatvori"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingLeave = true;
+        else
+        {
+            GUILayout.BeginHorizontal();
 
-        GUILayout.EndHorizontal();
+            bool enter = e.type == EventType.KeyDown
+                         && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
+                         && GUI.GetNameOfFocusedControl() == "ChatInput";
+            if (enter) { pendingSend = true; e.Use(); }
+
+            // ignore the key that opened the dialogue so it isn't typed into the box
+            if (Time.unscaledTime < openedTime + 0.2f) inputText = "";
+
+            GUI.SetNextControlName("ChatInput");
+            inputText = GUILayout.TextField(inputText, 300, inputStyle, GUILayout.Height(36f));
+
+            if (GUILayout.Button(T("Send", "Pošalji"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingSend = true;
+            if (GUILayout.Button(T("Language", "Jezik"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingChooseLanguage = true;
+            if (companion != null && followAfterConversation)
+            {
+                string stayLabel = stayPut ? T("Follow me", "Prati me") : T("Stay here", "Ostani ovdje");
+                if (GUILayout.Button(stayLabel, buttonStyle, GUILayout.Width(130f), GUILayout.Height(36f)))
+                    pendingToggleStay = true;
+            }
+            if (GUILayout.Button(T("Leave", "Zatvori"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingLeave = true;
+
+            GUILayout.EndHorizontal();
+        }
         GUILayout.EndArea();
 
         if (focusRequested && e.type == EventType.Repaint)

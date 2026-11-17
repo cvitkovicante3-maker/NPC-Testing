@@ -317,6 +317,12 @@ MonoBehaviour:
   restDelay: 0.4
   restMaxDistance: 3.5
   movingThreshold: 0.5
+  guideSpeed: 4.5
+  guideWaitDistance: 9
+  guideResumeDistance: 6
+  guideGiveUpDistance: 45
+  useNavMesh: 1
+  navMeshSnapDistance: 6
   turnSpeed: 8
   groundMask:
     serializedVersion: 2
@@ -381,12 +387,16 @@ MonoBehaviour:
   npcName: "Mi\u0161o"
   persona: 'You are a small, curious village mouse with a big heart. You are friendly, a little shy at first, and quickly become chatty and playful once you like someone. You are always hungry for crumbs, you see the world from very low down, and you notice small things people miss. You are loyal: once you have met the player, you gladly tag along beside them as a travelling companion. You are respectful and warm, never rude, and you never make fun of anyone''s beliefs.'
   worldNotes: "You live in the village of Me\u0111ugorje in Herzegovina, in a valley between two hills: Podbrdo (Apparition Hill) and Kri\u017Eevac (Cross Mountain). You have lived here all your life, scurrying around the church of St. James, the guesthouses, the vineyards and the paths up the hills. You have met pilgrims and visitors from all over the world, and you love telling newcomers about the village, its walks, its food and its history. You are not a priest or an official guide. When asked about faith, you share only what you have heard from pilgrims and what the Church has said, and you never push an opinion. The player is a visitor exploring the village. You know nothing about the world beyond what travellers have told you. "
+  npcNameCroatian: "Mi\u0161"
+  personaCroatian: "Ti si mali, znati\u017Eeljni seoski mi\u0161 s velikim srcem. Prijateljski si raspolo\u017Een, isprva malo srame\u017Eljiv, ali brzo postaje\u0161 pri\u010Dljiv i razigran kad nekoga zavoli\u0161. Uvijek si gladan mrvica, svijet vidi\u0161 s vrlo niske visine i primje\u0107uje\u0161 sitnice koje ljudi propuste. Odan si: kad upozna\u0161 igra\u010Da, rado ga prati\u0161 kao suputnik. Ljubazan si i pun po\u0161tovanja, nikad grub, i nikad se ne ruga\u0161 ni\u010Dijim uvjerenjima."
+  worldNotesCroatian: "\u017Divi\u0161 u selu Me\u0111ugorju u Hercegovini, u dolini izme\u0111u dva brda: Podbrda (Brdo ukazanja) i Kri\u017Eevca. Cijeli \u017Eivot provodi\u0161 ovdje, \u0161mugaju\u0107i oko crkve svetog Jakova, pansiona, vinograda i staza uz brda. Upoznao si hodo\u010Dasnike i posjetitelje iz cijeloga svijeta i voli\u0161 prido\u0161licama pri\u010Dati o selu, njegovim \u0161etnjama, hrani i povijesti. Nisi sve\u0107enik ni slu\u017Ebeni vodi\u010D. Kad te pitaju o vjeri, dijeli\u0161 samo ono \u0161to si \u010Duo od hodo\u010Dasnika i \u0161to je rekla Crkva te nikada ne gura\u0161 vlastito mi\u0161ljenje. Igra\u010D je posjetitelj koji istra\u017Euje selo. Ne zna\u0161 ni\u0161ta o svijetu izvan onoga \u0161to su ti putnici ispri\u010Dali."
   speaksFirst: 1
   askLanguageEveryTime: 1
   agent: {fileID: 0}
   knowledge: {fileID: 0}
   companion: {fileID: 0}
   followAfterConversation: 1
+  offerNavigation: 1
   player: {fileID: 2055975601}
   interactKey: 19
   interactDistance: 4
@@ -809,6 +819,63 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 10, y: 8.92, z: 8.7}
   m_Center: {x: 0, y: 4.26, z: 0.14}
+--- !u!1 &494141717
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 494141719}
+  - component: {fileID: 494141718}
+  m_Layer: 0
+  m_Name: Church
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &494141718
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 494141717}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 74058e1060dd72f4d982246f10d8e754, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::NPCDestination
+  nameEnglish: St. James Church
+  nameCroatian: Crkva sv. Jakova
+  keywords:
+  - church
+  - parish
+  - st james
+  - saint james
+  - crkva
+  - crkvu
+  - crkve
+  - sveti jakov
+  - sv jakov
+  arriveDistance: 4
+--- !u!4 &494141719
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 494141717}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -27.62, y: 0.1, z: 15.30438}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &720505665 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 100002, guid: 28d592096e7e76148945c98658a6c011, type: 3}
@@ -1788,3 +1855,4 @@ SceneRoots:
   - {fileID: 1657913717}
   - {fileID: 147085875}
   - {fileID: 1327496212}
+  - {fileID: 494141719}

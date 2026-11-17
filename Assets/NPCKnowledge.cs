@@ -209,7 +209,7 @@ public class NPCKnowledge : MonoBehaviour
 
     // Lower-case, no accents (č -> c, š -> s, đ/dj -> d), only letters and digits separated by
     // single spaces. "Međugorje" and "Medjugorje" both become "medugorje".
-    private static string Normalize(string s)
+    public static string Normalize(string s)
     {
         if (string.IsNullOrEmpty(s)) return "";
 
