@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -16,19 +17,47 @@ public class NPCDialogue : MonoBehaviour
 {
     private class Line { public bool fromPlayer; public string text; }
 
-    [Header("Character (this is all the 'writing' the AI needs)")]
+    [Header("Character in English")]
     [SerializeField] private string npcName = "Mouse";
     [TextArea(5, 12)]
     [SerializeField]
     private string persona =
-        "You are a small, curious village mouse. You are friendly, a little shy but chatty, and easily " +
-        "distracted by cheese and crumbs. You love gossip about the village and are always scurrying about. " +
-        "You have a warm, playful sense of humor.";
+        "You are a small, curious village mouse with a big heart. You are friendly, a little shy at first, and quickly " +
+        "become chatty and playful once you like someone. You are always hungry for crumbs, you see the world from very " +
+        "low down, and you notice small things people miss. You are loyal: once you have met the player, you gladly tag " +
+        "along beside them as a travelling companion. You are respectful and warm, never rude, and you never make fun " +
+        "of anyone's beliefs.";
     [TextArea(3, 8)]
     [SerializeField]
     private string worldNotes =
-        "You live in a small village next to a road, in the shadow of an old red-brick house. " +
-        "The player is a newcomer exploring the village. You know nothing about the world outside the village.";
+        "You live in the village of Međugorje in Herzegovina, in a valley between two hills: Podbrdo (Apparition Hill) " +
+        "and Križevac (Cross Mountain). You have lived here all your life, scurrying around the church of St. James, the " +
+        "guesthouses, the vineyards and the paths up the hills. You have met pilgrims and visitors from all over the world, " +
+        "and you love telling newcomers about the village, its walks, its food and its history. You are not a priest or an " +
+        "official guide. When asked about faith, you share only what you have heard from pilgrims and what the Church has " +
+        "said, and you never push an opinion. The player is a visitor exploring the village. You know nothing about the " +
+        "world beyond what travellers have told you.";
+
+    [Header("Character in Croatian")]
+    [Tooltip("The name shown when talking in Croatian. Leave empty to use the same name as in English.")]
+    [SerializeField] private string npcNameCroatian = "Miš";
+    [TextArea(5, 12)]
+    [SerializeField]
+    private string personaCroatian =
+        "Ti si mali, znatiželjni seoski miš s velikim srcem. Prijateljski si raspoložen, isprva malo sramežljiv, ali brzo " +
+        "postaješ pričljiv i razigran kad nekoga zavoliš. Uvijek si gladan mrvica, svijet vidiš s vrlo niske visine i " +
+        "primjećuješ sitnice koje ljudi propuste. Odan si: kad upoznaš igrača, rado ga pratiš kao suputnik. Ljubazan si i pun " +
+        "poštovanja, nikad grub, i nikad se ne rugaš ničijim uvjerenjima.";
+    [TextArea(3, 8)]
+    [SerializeField]
+    private string worldNotesCroatian =
+        "Živiš u selu Međugorju u Hercegovini, u dolini između dva brda: Podbrda (Brdo ukazanja) i Križevca. Cijeli život " +
+        "provodiš ovdje, šmugajući oko crkve svetog Jakova, pansiona, vinograda i staza uz brda. Upoznao si hodočasnike i " +
+        "posjetitelje iz cijeloga svijeta i voliš pridošlicama pričati o selu, njegovim šetnjama, hrani i povijesti. Nisi " +
+        "svećenik ni službeni vodič. Kad te pitaju o vjeri, dijeliš samo ono što si čuo od hodočasnika i što je rekla Crkva " +
+        "te nikada ne guraš vlastito mišljenje. Igrač je posjetitelj koji istražuje selo. Ne znaš ništa o svijetu izvan onoga " +
+        "što su ti putnici ispričali.";
+
     [Tooltip("The NPC greets the player first when the conversation starts.")]
     [SerializeField] private bool speaksFirst = true;
 
@@ -68,7 +97,7 @@ public class NPCDialogue : MonoBehaviour
     private readonly List<Line> log = new List<Line>();
     private Line lastPlayerLine;
     private string lastPlayerText;
-    private bool talking, waiting, promptApplied;
+    private bool talking, waiting;
     private string inputText = "";
     private string status = "";
     private bool stayPut, pendingToggleStay;
@@ -77,7 +106,7 @@ public class NPCDialogue : MonoBehaviour
     private DialogueLanguage language = DialogueLanguage.English;
     private bool languageChosen;
     private bool selectingLanguage;
-    private bool sendCoreNotes;                 // send the NPC's background facts with the next message
+    private bool sendBriefing = true;           // send the character description + background facts with the next message
     private int pendingLanguage = -1;           // set by buttons / keys, applied in Update
     private bool pendingChooseLanguage;
 
@@ -139,6 +168,14 @@ public class NPCDialogue : MonoBehaviour
     {
         return language == DialogueLanguage.Croatian ? croatian : english;
     }
+
+    // The NPC's name in the language being spoken
+    private string DisplayName =>
+        (language == DialogueLanguage.Croatian && !string.IsNullOrWhiteSpace(npcNameCroatian)) ? npcNameCroatian : npcName;
+
+    // A name that is the same in both languages (or "" if the names differ), safe to show before a language is chosen
+    private string NeutralName =>
+        (string.IsNullOrWhiteSpace(npcNameCroatian) || npcNameCroatian == npcName) ? npcName : "";
 
     // ---------------------------------------------------------------- logic
 
@@ -206,14 +243,9 @@ public class NPCDialogue : MonoBehaviour
 
         // First ask which language to talk in (unless it was chosen before and we should remember it)
         if (askLanguageEveryTime || !languageChosen)
-        {
             selectingLanguage = true;
-        }
         else
-        {
-            sendCoreNotes = true;
             StartConversation();
-        }
     }
 
     private void EndTalking()
@@ -230,17 +262,28 @@ public class NPCDialogue : MonoBehaviour
         }
     }
 
-    // The player picked a language: switch to it and (the first time) let the NPC greet them
+    // The player picked a language. Switching language starts a fresh conversation, so that nothing
+    // from the other language stays on screen or in the model's memory.
     private void ApplyLanguage(DialogueLanguage chosen)
     {
+        bool changed = languageChosen && chosen != language;
+
         language = chosen;
         languageChosen = true;
         selectingLanguage = false;
-        sendCoreNotes = true;
         status = "";
         openedTime = Time.unscaledTime;
         focusRequested = true;
         scrollFrames = 3;
+
+        if (changed)
+        {
+            log.Clear();
+            lastPlayerLine = null;
+            lastPlayerText = null;
+            ResetAgentHistory();
+            sendBriefing = true;
+        }
 
         StartConversation();
     }
@@ -295,43 +338,65 @@ public class NPCDialogue : MonoBehaviour
         waiting = true;
         status = "";
 
-        // Every message starts with the language to reply in, then the facts that match the question
+        // What the model receives (the player only sees their own words):
+        //   language tag, then (first message only) the character description, then the matching facts,
+        //   then the player's message, then a reminder of the language to answer in.
         string query = LanguageTag() + "\n";
+        if (sendBriefing) query += BuildBriefing() + "\n\n";
         if (knowledge != null)
         {
-            string notes = knowledge.BuildContextFor(visible ? text : "", language, sendCoreNotes);
+            string notes = knowledge.BuildContextFor(visible ? text : "", language, sendBriefing);
             if (notes.Length > 0) query += notes + "\n\n";
         }
-        sendCoreNotes = false;
-        query += text;
+        sendBriefing = false;
+        query += text + "\n\n" + LanguageReminder();
 
         _ = AskAsync(query);
     }
 
+    // Short tag at the start of every message, written in the language to answer in
     private string LanguageTag()
     {
         return language == DialogueLanguage.Croatian
-            ? "[Reply in Croatian. Odgovori na hrvatskom jeziku.]"
-            : "[Reply in English.]";
+            ? "[Odgovaraj samo na hrvatskom jeziku.]"
+            : "[Reply only in English.]";
     }
 
-    private async Task AskAsync(string text)
+    // Reminder at the END of every message: small models pay most attention to the last lines
+    private string LanguageReminder()
+    {
+        return language == DialogueLanguage.Croatian
+            ? "(Odgovori samo na hrvatskom jeziku. Ne piši engleski i ne prevodi.)"
+            : "(Reply only in English. Do not add a translation.)";
+    }
+
+    // Used for a second attempt when the model answered in the wrong language
+    private string StrongReminder()
+    {
+        return language == DialogueLanguage.Croatian
+            ? "[VAŽNO: odgovori ISKLJUČIVO na hrvatskom jeziku. Tvoj prethodni odgovor nije bio na hrvatskom.]"
+            : "[IMPORTANT: reply ONLY in English. Your previous reply was not in English.]";
+    }
+
+    private async Task AskAsync(string query)
     {
         try
         {
-            // The LLM Agent keeps its own chat history, so we only send the newest message.
-            if (!promptApplied)
+            string reply = await agent.Chat(query);
+            reply = LanguageGuard.Clean(reply, language, out bool wrongLanguage);
+
+            // Wrong language: forget that exchange and try once more with a firmer instruction
+            if (wrongLanguage)
             {
-                agent.systemPrompt = BuildSystemPrompt();
-                promptApplied = true;
+                DropLastExchange();
+                string second = await agent.Chat(StrongReminder() + "\n" + query);
+                second = LanguageGuard.Clean(second, language, out _);
+                if (second.Length > 0) reply = second;
             }
 
-            string reply = await agent.Chat(text);
-            reply = reply == null ? "" : reply.Trim();
-
-            if (reply.Length == 0) OnError(T("The local model returned an empty reply.",
-                                             "Lokalni model je vratio prazan odgovor."));
-            else OnReply(reply);
+            if (string.IsNullOrWhiteSpace(reply)) OnError(T("The local model returned an empty reply.",
+                                                            "Lokalni model je vratio prazan odgovor."));
+            else OnReply(reply.Trim());
         }
         catch (Exception e)
         {
@@ -358,7 +423,7 @@ public class NPCDialogue : MonoBehaviour
         if (lastPlayerText != null && inputText.Length == 0) inputText = lastPlayerText;
         lastPlayerLine = null;
         lastPlayerText = null;
-        sendCoreNotes = true;   // the background facts may not have arrived, send them again
+        sendBriefing = true;   // the character description may not have arrived, send it again
     }
 
     private Line AddLine(bool fromPlayer, string text)
@@ -369,29 +434,146 @@ public class NPCDialogue : MonoBehaviour
         return line;
     }
 
-    private string KnowledgeInstructions()
+    // Removes the last player message and the last reply from the model's memory
+    private void DropLastExchange()
     {
-        if (knowledge == null) return "";
-
-        return "\n\nSometimes the player's message contains some notes in square brackets. Use them naturally " +
-               "to answer; never read them out and never mention that you were given notes. " +
-               "If neither your knowledge nor the notes cover a question, say you're not sure instead of inventing facts.";
+        try
+        {
+            var chat = agent.chat;
+            if (chat != null && chat.Count >= 2) chat.RemoveRange(chat.Count - 2, 2);
+        }
+        catch (Exception) { }
     }
 
-    private string BuildSystemPrompt()
+    // Gives the model a clean memory (used when the player switches language)
+    private void ResetAgentHistory()
     {
-        return persona.Trim() +
-               "\n\nYour name is " + npcName + "." +
-               "\n\nWhat you know about your world:\n" + worldNotes.Trim() + KnowledgeInstructions() +
-               "\n\nYou are a character in a video game, talking with the player. Stay in character. " +
-               "Keep replies short (one to three sentences) and natural, like speech. " +
+        if (agent == null) return;
+        try
+        {
+            var old = agent.chat;
+            var fresh = new List<LLMUnity.ChatMessage>();
+            // keep the system message, if this version of the package stores it in the chat list
+            if (old != null && old.Count > 0 && old[0] != null && old[0].role == "system") fresh.Add(old[0]);
+            agent.chat = fresh;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("NPCDialogue: couldn't reset the chat history: " + e.Message, this);
+        }
+    }
+
+    // The character description, written in the language being spoken. It goes in front of the first
+    // message of every conversation (instead of relying on the LLM Agent's System Prompt field).
+    private string BuildBriefing()
+    {
+        bool hr = language == DialogueLanguage.Croatian;
+        bool tagAlong = companion != null && followAfterConversation;
+
+        if (hr)
+        {
+            return "Igraš lik u videoigri. Cijelo vrijeme ostani u liku.\n\n" +
+                   personaCroatian.Trim() +
+                   "\n\nTvoje ime je " + DisplayName + "." +
+                   "\n\nŠto znaš o svom svijetu:\n" + worldNotesCroatian.Trim() +
+                   (knowledge != null
+                       ? "\n\nPonekad poruka igrača sadrži bilješke u uglatim zagradama. Koristi ih prirodno za odgovor; nikada ih ne čitaj naglas i ne spominji da si ih dobio. Ako ni tvoje znanje ni bilješke ne pokrivaju pitanje, reci da nisi siguran umjesto da izmišljaš činjenice."
+                       : "") +
+                   "\n\nPravila: razgovaraj s igračem. Odgovaraj kratko (jedna do tri rečenice) i prirodno, kao u govoru. " +
+                   "Bez opisa radnji, bez zvjezdica, bez emotikona. " +
+                   "Govoriš ISKLJUČIVO hrvatski (standardni hrvatski jezik). Nikada ne odgovaraj na engleskom i nikada ne prevodi svoj odgovor na engleski." +
+                   (tagAlong ? "\nKad razgovor završi, rado pratiš igrača kao suputnik." : "");
+        }
+
+        return "You are playing a character in a video game. Stay in character at all times.\n\n" +
+               persona.Trim() +
+               "\n\nYour name is " + DisplayName + "." +
+               "\n\nWhat you know about your world:\n" + worldNotes.Trim() +
+               (knowledge != null
+                   ? "\n\nSometimes the player's message contains some notes in square brackets. Use them naturally to answer; never read them out and never mention that you were given notes. If neither your knowledge nor the notes cover a question, say you're not sure instead of inventing facts."
+                   : "") +
+               "\n\nRules: talk with the player. Keep replies short (one to three sentences) and natural, like speech. " +
                "No stage directions, no asterisks, no emojis. " +
-               "Every player message begins with a note in square brackets saying which language to reply in " +
-               "(English or Croatian). Always reply in that language, even if earlier messages used another one. " +
-               "When you reply in Croatian, use simple, natural standard Croatian." +
-               (companion != null && followAfterConversation
-                   ? "\n\nWhen the conversation ends, you happily tag along beside the player as a travelling companion."
-                   : "");
+               "You speak only English. Never answer in Croatian and never add a translation." +
+               (tagAlong ? "\nWhen the conversation ends, you happily tag along beside the player as a travelling companion." : "");
+    }
+
+    // ------------------------------------------------------- language check
+
+    // Catches replies in the wrong language, and removes translations that the model adds next to its answer
+    // (for example "Zdravo! (Hello!)" or an English line under a Croatian one).
+    private static class LanguageGuard
+    {
+        private static readonly HashSet<string> EnglishWords = new HashSet<string>
+        {
+            "the", "and", "you", "your", "yours", "is", "are", "was", "were", "this", "that", "with", "for", "have", "has",
+            "not", "but", "what", "how", "who", "where", "when", "why", "can", "will", "would", "could", "should", "hello",
+            "welcome", "here", "there", "from", "about", "they", "them", "we", "it's", "i'm", "don't", "just", "very", "my",
+            "of", "in", "it", "be", "am", "if", "or", "at", "as", "an", "by", "all", "so", "some", "there's", "that's",
+            "what's", "let's", "you're", "i'd", "i'll", "i've", "love", "like", "know", "tell", "visit", "village", "little",
+            "great", "good", "nice", "yes", "please", "thank", "thanks"
+        };
+
+        private static readonly HashSet<string> CroatianWords = new HashSet<string>
+        {
+            "je", "sam", "si", "smo", "ste", "su", "se", "ne", "da", "na", "za", "što", "sto", "ti", "ja", "vi", "ovo",
+            "kako", "gdje", "kad", "kada", "koji", "koja", "koje", "ali", "od", "po", "pa", "ovdje", "tamo", "dobro",
+            "hvala", "bok", "zdravo", "molim", "jako", "samo", "ima", "imam", "imaš", "možeš", "mogu", "volim", "kod",
+            "ili", "jer", "nije", "nisam", "bih", "bi", "će", "ću", "ćeš", "već", "još", "vrlo", "svi", "sve", "moj",
+            "moja", "moje", "tvoj", "tvoja", "naš", "naša", "ovaj", "ova", "taj", "ta", "tko", "zašto", "jesi", "jesam",
+            "bio", "bila", "bilo", "ako", "kao", "preko", "iz", "među", "nešto", "ništa", "uvijek", "nikad", "sada",
+            "danas", "malo", "puno", "mnogo", "hej", "dragi", "selo", "brdo", "crkva", "mi", "nas", "vas", "njih",
+            "sa", "uz", "oko", "dan", "dobar", "dobrodošao", "dobrodošli", "u", "došli", "došao", "došla"
+        };
+
+        public static string Clean(string reply, DialogueLanguage language, out bool stillWrong)
+        {
+            stillWrong = false;
+            if (string.IsNullOrWhiteSpace(reply)) return "";
+
+            // *stage directions*
+            string text = Regex.Replace(reply, @"\*[^*\n]*\*", " ");
+
+            // translations in parentheses
+            text = Regex.Replace(text, @"\(([^)]*)\)", m => IsWrong(m.Groups[1].Value, language, 1) ? "" : m.Value);
+
+            // whole sentences / lines in the other language
+            string[] parts = Regex.Split(text, @"(?<=[.!?])\s+|\n+");
+            var kept = new List<string>();
+            foreach (string part in parts)
+            {
+                string p = part.Trim();
+                if (p.Length == 0) continue;
+                if (!IsWrong(p, language, 2)) kept.Add(p);
+            }
+
+            if (kept.Count == 0)
+            {
+                stillWrong = true;          // everything was in the wrong language
+                return text.Trim();
+            }
+
+            return string.Join(" ", kept).Trim();
+        }
+
+        private static bool IsWrong(string segment, DialogueLanguage language, int minHits)
+        {
+            int english = 0, croatian = 0, total = 0;
+            foreach (Match m in Regex.Matches(segment.ToLowerInvariant(), @"[\p{L}']+"))
+            {
+                string w = m.Value;
+                total++;
+                if (EnglishWords.Contains(w)) english++;
+                if (CroatianWords.Contains(w)) croatian++;
+            }
+
+            // very short segments ("Hello!") only need one telling word
+            int needed = total <= 3 ? 1 : minHits;
+
+            return language == DialogueLanguage.Croatian
+                ? english >= needed && english > croatian
+                : croatian >= needed && croatian > english;
+        }
     }
 
     // ------------------------------------------------------------------ UI
@@ -411,11 +593,11 @@ public class NPCDialogue : MonoBehaviour
 
         if (!talking)
         {
-            // Before a language has been chosen the prompt is just the key and the name; afterwards it is
-            // written only in the chosen language.
+            // Before a language has been chosen the prompt is just the key (and the name, if it is the same
+            // in both languages); afterwards it is written only in the chosen language.
             string prompt = languageChosen
                 ? T("Press " + interactKey + " to talk", "Pritisni " + interactKey + " za razgovor")
-                : "[" + interactKey + "]   " + npcName;
+                : ("[" + interactKey + "]   " + NeutralName).Trim();
 
             var r = new Rect(vw / 2f - 220f, vh - 90f, 440f, 44f);
             GUI.Box(r, prompt, promptStyle);
@@ -460,14 +642,17 @@ public class NPCDialogue : MonoBehaviour
     private void DrawLanguageChoice(float vw, float vh)
     {
         float w = Mathf.Min(520f, vw - 40f);
-        float h = 150f;
+        float h = NeutralName.Length > 0 ? 150f : 110f;
         var panel = new Rect((vw - w) / 2f, vh - h - 24f, w, h);
         GUI.Box(panel, GUIContent.none, boxStyle);
 
         GUILayout.BeginArea(new Rect(panel.x + 18f, panel.y + 12f, panel.width - 36f, panel.height - 24f));
 
-        GUILayout.Label(npcName, nameStyle);
-        GUILayout.Space(6f);
+        if (NeutralName.Length > 0)
+        {
+            GUILayout.Label(NeutralName, nameStyle);
+            GUILayout.Space(6f);
+        }
 
         GUILayout.BeginHorizontal();
         if (GUILayout.Button("English   [1]", bigButtonStyle, GUILayout.Height(52f))) pendingLanguage = 0;
@@ -489,7 +674,7 @@ public class NPCDialogue : MonoBehaviour
 
         GUILayout.BeginArea(new Rect(panel.x + 18f, panel.y + 12f, panel.width - 36f, panel.height - 24f));
 
-        GUILayout.Label(npcName, nameStyle);
+        GUILayout.Label(DisplayName, nameStyle);
 
         // conversation log
         if (scrollFrames > 0)
@@ -500,10 +685,10 @@ public class NPCDialogue : MonoBehaviour
         scroll = GUILayout.BeginScrollView(scroll, GUILayout.ExpandHeight(true));
         foreach (Line l in log)
         {
-            string who = l.fromPlayer ? T("You: ", "Ti: ") : npcName + ": ";
+            string who = l.fromPlayer ? T("You: ", "Ti: ") : DisplayName + ": ";
             GUILayout.Label(who + l.text, l.fromPlayer ? playerLineStyle : npcLineStyle);
         }
-        if (waiting) GUILayout.Label(npcName + T(" is thinking...", " razmišlja..."), thinkStyle);
+        if (waiting) GUILayout.Label(DisplayName + T(" is thinking...", " razmišlja..."), thinkStyle);
         GUILayout.EndScrollView();
 
         if (status.Length > 0) GUILayout.Label(status, statusStyle);
