@@ -89,6 +89,7 @@ public class NPCCompanion : MonoBehaviour
     private bool guiding;
     private bool guideWaiting;
     private bool followAfterGuide;
+    private float guideAvoidSide = 1f;   // which way to walk around a player who blocks the route (+1 / -1)
     private Vector3 guideDestination;
     private float guideArriveDistance;
     private Action guideArrived;
@@ -357,6 +358,26 @@ public class NPCCompanion : MonoBehaviour
                 // go a bit slower when the player is lagging behind
                 float closeness = Mathf.InverseLerp(guideWaitDistance, guideResumeDistance, playerDistance);
                 desired = corner.normalized * guideSpeed * Mathf.Lerp(0.4f, 1f, closeness);
+            }
+        }
+
+        // The player is standing in the way: walk AROUND them instead of into them (and never stall)
+        if (desired.sqrMagnitude > 0.0001f && playerDistance > 0.001f && playerDistance < space + 1.5f)
+        {
+            Vector3 dirToPlayer = toPlayer / playerDistance;
+            float into = Vector3.Dot(desired, dirToPlayer);
+            if (into > 0f)
+            {
+                Vector3 tangent = Vector3.Cross(Vector3.up, dirToPlayer);
+                float side = Vector3.Dot(tangent, desired);
+                if (Mathf.Abs(side) < 0.25f * desired.magnitude)
+                    side = guideAvoidSide;                        // head-on: keep the side we already chose
+                else
+                    guideAvoidSide = Mathf.Sign(side);            // remember it so we never flip back and forth
+                if (side < 0f) tangent = -tangent;
+
+                // sidestep at full speed, plus a small push away from the player
+                desired = tangent * desired.magnitude - dirToPlayer * (into * 0.3f);
             }
         }
 

@@ -112,7 +112,25 @@ public class NPCDestination : MonoBehaviour
         " there ", " it ", " that place ", " the same place ", " again ", " tamo ", " onamo ", " opet ", " ponovno ", " to mjesto "
     };
 
-    /// <summary>"Take me to the church", "odvedi me do crkve", "let's go to...": an order, not a question.</summary>
+    // "Are there any hotels here?", "ima li hotela?": asking whether a kind of place exists nearby
+    private static readonly string[] ExistenceWords =
+    {
+        "are there", "is there", "any", "do you know", "know of", "nearby", "near here", "around here", "in the area",
+        "close by", "recommend", "suggest", "list", "options", "which",
+        "ima li", "ima", "postoji", "postoje", "ikakv", "u blizini", "blizu", "ovdje", "preporuci", "preporuc",
+        "predlozi", "koji", "koje", "koja", "znas li"
+    };
+
+    /// <summary>Only meaningful together with a matched place: "are there any hotels here?"</summary>
+    public static bool LooksLikeExistenceQuestion(string message)
+    {
+        string padded = " " + NPCKnowledge.Normalize(message) + " ";
+        foreach (string word in ExistenceWords)
+            if (Has(padded, NPCKnowledge.Normalize(word))) return true;
+        return false;
+    }
+
+    /// <summary>"Take me to the church","odvedi me do crkve", "let's go to...": an order, not a question.</summary>
     public static bool LooksLikeDirectCommand(string message)
     {
         string padded = " " + NPCKnowledge.Normalize(message) + " ";
@@ -153,6 +171,36 @@ public class NPCDestination : MonoBehaviour
             if (score > bestScore) { best = d; bestScore = score; }
         }
         return best;
+    }
+
+    /// <summary>
+    /// Every destination the message talks about equally well. "a hotel" returns all hotels;
+    /// "Hotel Santa Maria" returns just that one. Empty if nothing matches.
+    /// </summary>
+    public static List<NPCDestination> FindAllInMessage(string message)
+    {
+        string padded = " " + NPCKnowledge.Normalize(message) + " ";
+
+        var result = new List<NPCDestination>();
+        int bestScore = 0;
+        foreach (NPCDestination d in All)
+        {
+            if (d == null) continue;
+            int score = d.Score(padded);
+            if (score <= 0) continue;
+            if (score > bestScore) { bestScore = score; result.Clear(); }
+            if (score == bestScore) result.Add(d);
+        }
+        return result;
+    }
+
+    /// <summary>Words used to look up facts about this place in the knowledge base.</summary>
+    public string FactsQuery()
+    {
+        var sb = new StringBuilder();
+        sb.Append(nameEnglish).Append(' ').Append(nameCroatian);
+        if (keywords != null) foreach (string k in keywords) sb.Append(' ').Append(k);
+        return sb.ToString();
     }
 
     /// <summary>The names of all destinations, for telling the player what the mouse can show them.</summary>

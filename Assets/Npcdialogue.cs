@@ -82,6 +82,8 @@ public class NPCDialogue : MonoBehaviour
     [Header("Navigation (leading the player to places)")]
     [Tooltip("When the player asks where a marked place is (see NPCDestination), the NPC offers to lead the way. Needs an NPCCompanion.")]
     [SerializeField] private bool offerNavigation = true;
+    [Tooltip("When the NPC has led the player to a place, it stops, opens the chat and asks whether the player wants to hear facts about it.")]
+    [SerializeField] private bool offerFactsOnArrival = true;
 
     [Header("Interaction")]
     [Tooltip("Leave empty to find the object with GTAPlayerMovement automatically.")]
@@ -92,6 +94,16 @@ public class NPCDialogue : MonoBehaviour
     [SerializeField] private float followingInteractDistance = 12f;
     [SerializeField] private bool facePlayerWhileTalking = true;
     [SerializeField] private float turnSpeed = 6f;
+
+    [Header("Chat look")]
+    [Tooltip("Optional: drag a .ttf / .otf font here. If empty, the script looks for Assets/Resources/Fonts/AtkinsonHyperlegible_400Regular, and then falls back to the computer's Segoe UI / Arial.")]
+    [SerializeField] private Font uiFont;
+    [Tooltip("Optional bold version of the font (used for headings and buttons). If empty, the regular font is made bold automatically.")]
+    [SerializeField] private Font uiFontBold;
+    [Tooltip("Makes the whole chat bigger or smaller.")]
+    [Range(0.7f, 2f)][SerializeField] private float uiScale = 1f;
+    [Tooltip("Makes only the TEXT bigger or smaller (the panel and buttons stay the same size). Changes apply immediately, also while the game is running.")]
+    [Range(0.7f, 2f)][SerializeField] private float textSize = 1.15f;
 
     [Header("Troubleshooting")]
     [Tooltip("Shows a yellow status line at the top-left of the Game view. Turn off once everything works.")]
@@ -111,6 +123,13 @@ public class NPCDialogue : MonoBehaviour
     private NPCDestination activeOffer;         // the place being offered right now
     private bool offering;                      // showing the Yes / No buttons
     private int pendingOfferChoice = -1;        // 0 = yes, 1 = no (set by buttons / keys)
+    private enum OfferKind { Guide, Facts }
+    private OfferKind offerKind = OfferKind.Guide;   // what the Yes / No buttons are about
+    private string factsTopic;                  // set while asking for facts about a place (used to look them up)
+    private List<NPCDestination> pendingChoices;     // several places match: waiting for the NPC's reply
+    private List<NPCDestination> choices;            // the list the player picks from
+    private bool choosing;                      // showing the numbered list of places
+    private int pendingChoicePick = -1;         // index picked, or -2 for "none"
     private NPCDestination guidingTo;           // where the NPC is leading the player
     private NPCDestination lastPlace;           // the last place the player asked about ("take me there")
     private float startGuideAt = -1f;           // a direct "take me there" order: the guide starts at this time
@@ -130,9 +149,13 @@ public class NPCDialogue : MonoBehaviour
     private float openedTime;
     private Vector2 scroll;
     private int scrollFrames;
-    private GUIStyle boxStyle, promptStyle, nameStyle, npcLineStyle, playerLineStyle, thinkStyle,
-                     statusStyle, inputStyle, buttonStyle, bigButtonStyle;
-    private Texture2D panelTex;
+    private GUIStyle boxStyle, promptStyle, nameStyle, npcBubbleStyle, playerBubbleStyle, thinkStyle, statusStyle,
+                     inputStyle, hintStyle, buttonStyle, smallButtonStyle, accentButtonStyle, yesButtonStyle,
+                     choiceButtonStyle, bigButtonStyle, scrollbarStyle;
+    private GUISkin chatSkin;
+    private float builtTextSize;
+    private Font chatFont, chatFontBold;
+    private readonly List<Texture2D> uiTextures = new List<Texture2D>();
 
     // --- things we pause while talking ---
     private GTAPlayerMovement playerMovement;
@@ -175,7 +198,9 @@ public class NPCDialogue : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (panelTex != null) Destroy(panelTex);
+        foreach (Texture2D t in uiTextures) if (t != null) Destroy(t);
+        uiTextures.Clear();
+        if (chatSkin != null) Destroy(chatSkin);
     }
 
     // Picks the English or Croatian text, depending on the language the player chose
@@ -212,6 +237,12 @@ public class NPCDialogue : MonoBehaviour
                 else DeclineOffer();
             }
         }
+        if (pendingChoicePick != -1)
+        {
+            int pick = pendingChoicePick;
+            pendingChoicePick = -1;
+            if (talking && choosing) PickChoice(pick);
+        }
         if (startGuideAt >= 0f && Time.unscaledTime >= startGuideAt)
         {
             startGuideAt = -1f;
@@ -247,6 +278,13 @@ public class NPCDialogue : MonoBehaviour
         {
             if (kb.digit1Key.wasPressedThisFrame) pendingOfferChoice = 0;
             else if (kb.digit2Key.wasPressedThisFrame) pendingOfferChoice = 1;
+        }
+
+        if (choosing && choices != null)
+        {
+            for (int i = 0; i < choices.Count && i < 9; i++)
+                if (kb[(Key)((int)Key.Digit1 + i)].wasPressedThisFrame) pendingChoicePick = i;
+            if (kb.digit0Key.wasPressedThisFrame) pendingChoicePick = -2;
         }
 
         FacePlayer();
@@ -290,6 +328,9 @@ public class NPCDialogue : MonoBehaviour
         talking = false;
         selectingLanguage = false;
         offering = false;
+        choosing = false;
+        pendingChoices = null;
+        choices = null;
         pendingOffer = null;
         activeOffer = null;
         startGuideAt = -1f;
@@ -320,6 +361,10 @@ public class NPCDialogue : MonoBehaviour
         if (changed)
         {
             offering = false;
+            choosing = false;
+            pendingChoices = null;
+            choices = null;
+            startGuideAt = -1f;
             pendingOffer = null;
             activeOffer = null;
             log.Clear();
@@ -359,7 +404,7 @@ public class NPCDialogue : MonoBehaviour
     private void SendPlayerMessage()
     {
         string text = inputText.Trim();
-        if (text.Length == 0 || waiting || selectingLanguage || offering) return;
+        if (text.Length == 0 || waiting || selectingLanguage || offering || choosing) return;
         inputText = "";
         focusRequested = true;
         Say(text, visible: true);
@@ -392,9 +437,10 @@ public class NPCDialogue : MonoBehaviour
         if (sendBriefing) query += BuildBriefing() + "\n\n";
         if (knowledge != null)
         {
-            string notes = knowledge.BuildContextFor(visible ? text : "", language, sendBriefing);
+            string notes = knowledge.BuildContextFor(visible ? text : (factsTopic ?? ""), language, sendBriefing);
             if (notes.Length > 0) query += notes + "\n\n";
         }
+        factsTopic = null;
         if (visible) query += NavigationNote(text);
         sendBriefing = false;
         query += text + "\n\n" + LanguageReminder();
@@ -404,14 +450,21 @@ public class NPCDialogue : MonoBehaviour
 
     // ------------------------------------------------------------- navigation
 
-    // If the player asks where something is, tell the model what it knows. A known place becomes an offer
-    // (the Yes / No buttons appear after the NPC's reply); an unknown place is answered honestly.
-    // The place a message is about: named in it, or (for "there", "tamo", "again") the one asked about before
-    private NPCDestination PlaceFor(string text)
+    // The places a message is about: the ones it names (all of them if it only names a kind of place,
+    // like "a hotel"), or, for "there" / "tamo" / "again", the one asked about before.
+    private List<NPCDestination> PlacesFor(string text)
     {
-        NPCDestination place = NPCDestination.FindInMessage(text);
-        if (place == null && lastPlace != null && NPCDestination.RefersToPreviousPlace(text)) place = lastPlace;
-        return place;
+        List<NPCDestination> list = NPCDestination.FindAllInMessage(text);
+        if (list.Count == 0 && lastPlace != null && NPCDestination.RefersToPreviousPlace(text)) list.Add(lastPlace);
+        return list;
+    }
+
+    // Nearest to the player first
+    private void SortByDistance(List<NPCDestination> list)
+    {
+        if (player == null) return;
+        Vector3 p = player.position;
+        list.Sort((x, y) => (x.transform.position - p).sqrMagnitude.CompareTo((y.transform.position - p).sqrMagnitude));
     }
 
     // A direct order to be led somewhere. Replies with a fixed line, then starts guiding a moment later.
@@ -420,12 +473,14 @@ public class NPCDialogue : MonoBehaviour
         if (!offerNavigation || companion == null || NPCDestination.All.Count == 0) return false;
         if (!NPCDestination.LooksLikeDirectCommand(text)) return false;
 
-        NPCDestination place = PlaceFor(text);
-        if (place == null) return false;   // no known place named: let the model answer normally
+        List<NPCDestination> places = PlacesFor(text);
+        if (places.Count != 1) return false;   // nothing named (the model answers), or several (the player picks)
+        NPCDestination place = places[0];
 
         lastPlace = place;
         pendingOffer = null;
         offering = false;
+        offerKind = OfferKind.Guide;
         activeOffer = place;
         lastPlayerLine = null;
         lastPlayerText = null;
@@ -437,17 +492,44 @@ public class NPCDialogue : MonoBehaviour
         return true;
     }
 
+    // If the player asks where something is, tell the model what it knows. One known place becomes an offer
+    // (the Yes / No buttons appear after the NPC's reply); several places become a list to pick from;
+    // an unknown place is answered honestly.
     private string NavigationNote(string text)
     {
         pendingOffer = null;
+        pendingChoices = null;
         if (!offerNavigation || companion == null || NPCDestination.All.Count == 0) return "";
-        if (!NPCDestination.LooksLikeDirectionsRequest(text) && !NPCDestination.LooksLikeDirectCommand(text)) return "";
 
         bool hr = language == DialogueLanguage.Croatian;
-        NPCDestination place = PlaceFor(text);
+        List<NPCDestination> places = PlacesFor(text);
 
-        if (place != null)
+        // "where is...", "take me to...", or (when it names a place we know) "are there any hotels here?"
+        bool intent = NPCDestination.LooksLikeDirectionsRequest(text)
+                      || NPCDestination.LooksLikeDirectCommand(text)
+                      || (places.Count > 0 && NPCDestination.LooksLikeExistenceQuestion(text));
+        if (!intent) return "";
+
+        if (places.Count > 1)
         {
+            SortByDistance(places);
+            if (places.Count > 6) places.RemoveRange(6, places.Count - 6);
+            pendingChoices = places;
+
+            var names = new System.Text.StringBuilder();
+            for (int i = 0; i < places.Count; i++)
+            {
+                if (i > 0) names.Append(", ");
+                names.Append(places[i].NameFor(language));
+            }
+            return hr
+                ? "[Igrač pita za vrstu mjesta, a ti znaš više takvih mjesta u blizini: " + names + ". U jednoj do dvije kratke rečenice reci da znaš više njih, nabroji ih po imenu i pitaj koje želi posjetiti.]\n\n"
+                : "[The player asked about a kind of place, and you know several of them nearby: " + names + ". In one or two short sentences, say you know several, list them by name, and ask which one they would like to visit.]\n\n";
+        }
+
+        if (places.Count == 1)
+        {
+            NPCDestination place = places[0];
             lastPlace = place;
             pendingOffer = place;
             string name = place.NameFor(language);
@@ -462,9 +544,39 @@ public class NPCDialogue : MonoBehaviour
             : "[The player asked where a place is, but you don't know a place by that name. Say you don't know where that is. Places you can take the player to: " + known + ".]\n\n";
     }
 
-    // "Yes": close the chat and start leading the way
+    // The player picked a place from the list (or -2 = none of them)
+    private void PickChoice(int pick)
+    {
+        List<NPCDestination> list = choices;
+        choosing = false;
+        choices = null;
+        focusRequested = true;
+
+        if (pick < 0 || list == null || pick >= list.Count)
+        {
+            AddLine(true, T("None of them, thanks.", "Nijedno, hvala."));
+            Say(T("(The player doesn't want to go to any of those places. Reply in one short, friendly sentence and say they can ask you about anything else.)",
+                  "(Igrač ne želi ići ni na jedno od tih mjesta. Odgovori jednom kratkom prijateljskom rečenicom i reci da te može pitati bilo što drugo.)"),
+                visible: false);
+            return;
+        }
+
+        NPCDestination place = list[pick];
+        lastPlace = place;
+        offerKind = OfferKind.Guide;
+        activeOffer = place;
+
+        string name = place.NameFor(language);
+        AddLine(true, name);
+        AddLine(false, T("Good choice! Follow me to " + name + ".", "Dobar izbor! Slijedi me do: " + name + "."));
+        startGuideAt = Time.unscaledTime + 1.2f;
+    }
+
+    // "Yes": lead the way (close the chat), or tell facts about the place we are standing at
     private void AcceptOffer()
     {
+        if (offerKind == OfferKind.Facts) { AcceptFacts(); return; }
+
         NPCDestination place = activeOffer;
         offering = false;
         activeOffer = null;
@@ -477,25 +589,63 @@ public class NPCDialogue : MonoBehaviour
         companion.StartGuiding(player, place.transform.position, place.ArriveDistance, followAfter, OnGuideArrived);
     }
 
+    private void AcceptFacts()
+    {
+        NPCDestination place = activeOffer;
+        offering = false;
+        activeOffer = null;
+        focusRequested = true;
+        if (place == null) return;
+
+        string name = place.NameFor(language);
+        AddLine(true, T("Yes, please.", "Da, molim."));
+        factsTopic = place.FactsQuery();   // makes the matching knowledge entries available to the model
+        Say(T("(The player is standing at " + name + " and wants to hear facts about it. Using the notes you were given, tell them two or three interesting facts in a friendly way, in at most four short sentences.)",
+              "(Igrač stoji kod mjesta: " + name + " i želi čuti činjenice o njemu. Koristeći dane bilješke, prijateljski mu ispričaj dvije do tri zanimljive činjenice, u najviše četiri kratke rečenice.)"),
+            visible: false);
+    }
+
     // "No": the NPC stays where it is and the conversation goes on
     private void DeclineOffer()
     {
+        bool facts = offerKind == OfferKind.Facts;
         offering = false;
         activeOffer = null;
         focusRequested = true;
 
         AddLine(true, T("No, thanks.", "Ne, hvala."));
-        Say(T("(The player declined your offer to lead them there. Reply in one short, friendly sentence and say you are right here if they need anything.)",
-              "(Igrač je odbio tvoju ponudu da ga odvedeš. Odgovori jednom kratkom prijateljskom rečenicom i reci da si tu ako mu išta zatreba.)"),
-            visible: false);
+        if (facts)
+            Say(T("(The player doesn't want to hear facts right now. Reply in one short, friendly sentence and say they can ask you anything about this place.)",
+                  "(Igrač trenutno ne želi čuti činjenice. Odgovori jednom kratkom prijateljskom rečenicom i reci da te može pitati bilo što o ovom mjestu.)"),
+                visible: false);
+        else
+            Say(T("(The player declined your offer to lead them there. Reply in one short, friendly sentence and say you are right here if they need anything.)",
+                  "(Igrač je odbio tvoju ponudu da ga odvedeš. Odgovori jednom kratkom prijateljskom rečenicom i reci da si tu ako mu išta zatreba.)"),
+                visible: false);
     }
 
+    // The mouse has led the player to the place: it stops, opens the chat and asks about facts
     private void OnGuideArrived()
     {
         if (this == null) return;
-        arrivedName = guidingTo != null ? guidingTo.NameFor(language) : "";
+        NPCDestination place = guidingTo;
+        arrivedName = place != null ? place.NameFor(language) : "";
         arrivedUntil = Time.time + 5f;
         guidingTo = null;
+
+        if (!offerFactsOnArrival || place == null || talking || player == null) return;
+
+        BeginTalking();                 // opens the chat and keeps the mouse standing here
+        selectingLanguage = false;      // the language is already known
+        pendingOffer = null;
+        pendingChoices = null;
+
+        string name = place.NameFor(language);
+        AddLine(false, T("We're here: " + name + ". Would you like to hear some facts about it?",
+                         "Stigli smo: " + name + ". Želiš li čuti nekoliko činjenica o tome?"));
+        activeOffer = place;
+        offerKind = OfferKind.Facts;
+        offering = true;
     }
 
     // Short tag at the start of every message, written in the language to answer in
@@ -559,9 +709,19 @@ public class NPCDialogue : MonoBehaviour
         {
             activeOffer = pendingOffer;
             pendingOffer = null;
+            offerKind = OfferKind.Guide;
             offering = true;
             if (!reply.Contains("?"))
                 reply += T(" Shall I take you there?", " Želiš li da te odvedem tamo?");
+        }
+        else if (pendingChoices != null)
+        {
+            // Several places match: show them as a numbered list after the NPC's reply
+            choices = pendingChoices;
+            pendingChoices = null;
+            choosing = true;
+            if (!reply.Contains("?"))
+                reply += T(" Which one would you like to visit?", " Koje želiš posjetiti?");
         }
 
         AddLine(false, reply);
@@ -572,6 +732,7 @@ public class NPCDialogue : MonoBehaviour
         if (this == null) return;
         waiting = false;
         pendingOffer = null;
+        pendingChoices = null;
         status = error;
 
         // Undo the failed message so the player can simply try again
@@ -732,6 +893,7 @@ public class NPCDialogue : MonoBehaviour
         }
     }
 
+
     // ------------------------------------------------------------------ UI
 
     private void OnGUI()
@@ -742,8 +904,10 @@ public class NPCDialogue : MonoBehaviour
         if (!talking && !InRange()) return;
 
         EnsureStyles();
+        GUISkin previousSkin = GUI.skin;
+        GUI.skin = chatSkin;
 
-        float s = Screen.height / 720f;
+        float s = Screen.height / 720f * uiScale;
         GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(s, s, 1f));
         float vw = Screen.width / s;
         float vh = Screen.height / s;
@@ -756,7 +920,7 @@ public class NPCDialogue : MonoBehaviour
                 ? T("Press " + interactKey + " to talk", "Pritisni " + interactKey + " za razgovor")
                 : ("[" + interactKey + "]   " + NeutralName).Trim();
 
-            var r = new Rect(vw / 2f - 220f, vh - 90f, 440f, 44f);
+            var r = new Rect(vw / 2f - 260f, vh - 96f, 520f, 54f);
             GUI.Box(r, prompt, promptStyle);
         }
         else if (selectingLanguage)
@@ -769,6 +933,7 @@ public class NPCDialogue : MonoBehaviour
         }
 
         GUI.matrix = Matrix4x4.identity;
+        GUI.skin = previousSkin;
     }
 
     // A line at the top of the screen while the NPC is leading the way, and for a moment after arriving
@@ -780,11 +945,11 @@ public class NPCDialogue : MonoBehaviour
         if (message == null) return;
 
         EnsureStyles();
-        float s = Screen.height / 720f;
+        float s = Screen.height / 720f * uiScale;
         GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(s, s, 1f));
         float vw = Screen.width / s;
 
-        GUI.Box(new Rect(vw / 2f - 260f, 44f, 520f, 44f), message, promptStyle);
+        GUI.Box(new Rect(vw / 2f - 300f, 44f, 600f, 54f), message, promptStyle);
         GUI.matrix = Matrix4x4.identity;
     }
 
@@ -815,12 +980,13 @@ public class NPCDialogue : MonoBehaviour
 
     private void DrawLanguageChoice(float vw, float vh)
     {
-        float w = Mathf.Min(520f, vw - 40f);
-        float h = NeutralName.Length > 0 ? 150f : 110f;
+        const float pad = 22f;
+        float w = Mathf.Min(580f, vw - 40f);
+        float h = NeutralName.Length > 0 ? 190f : 135f;
         var panel = new Rect((vw - w) / 2f, vh - h - 24f, w, h);
         GUI.Box(panel, GUIContent.none, boxStyle);
 
-        GUILayout.BeginArea(new Rect(panel.x + 18f, panel.y + 12f, panel.width - 36f, panel.height - 24f));
+        GUILayout.BeginArea(new Rect(panel.x + pad, panel.y + 16f, panel.width - pad * 2f, panel.height - 32f));
 
         if (NeutralName.Length > 0)
         {
@@ -828,10 +994,11 @@ public class NPCDialogue : MonoBehaviour
             GUILayout.Space(6f);
         }
 
+        float half = (panel.width - pad * 2f - 12f) / 2f;
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("English   [1]", bigButtonStyle, GUILayout.Height(52f))) pendingLanguage = 0;
-        GUILayout.Space(10f);
-        if (GUILayout.Button("Hrvatski   [2]", bigButtonStyle, GUILayout.Height(52f))) pendingLanguage = 1;
+        if (GUILayout.Button("English   [1]", bigButtonStyle, GUILayout.Width(half), GUILayout.Height(64f))) pendingLanguage = 0;
+        GUILayout.Space(12f);
+        if (GUILayout.Button("Hrvatski   [2]", bigButtonStyle, GUILayout.Width(half), GUILayout.Height(64f))) pendingLanguage = 1;
         GUILayout.EndHorizontal();
 
         GUILayout.EndArea();
@@ -841,47 +1008,102 @@ public class NPCDialogue : MonoBehaviour
     {
         Event e = Event.current;
 
-        float w = Mathf.Min(820f, vw - 40f);
-        float h = 310f;
+        const float pad = 22f;
+        float w = Mathf.Min(860f, vw - 40f);
+        float h = Mathf.Min(500f, vh - 60f);
         var panel = new Rect((vw - w) / 2f, vh - h - 24f, w, h);
         GUI.Box(panel, GUIContent.none, boxStyle);
 
-        GUILayout.BeginArea(new Rect(panel.x + 18f, panel.y + 12f, panel.width - 36f, panel.height - 24f));
+        float tz = Mathf.Max(1f, textSize);   // bigger text gets proportionally bigger buttons
+        float inner = w - pad * 2f;   // every control below has a fixed width, so nothing moves while typing
+        GUILayout.BeginArea(new Rect(panel.x + pad, panel.y + 14f, inner, h - 28f));
 
-        GUILayout.Label(DisplayName, nameStyle);
+        // ---- header: name on the left, small buttons on the right (they never move)
+        GUILayout.BeginHorizontal(GUILayout.Height(42f * tz));
+        GUILayout.Label(DisplayName, nameStyle, GUILayout.ExpandWidth(true), GUILayout.Height(42f * tz));
+        if (GUILayout.Button(T("Language", "Jezik"), smallButtonStyle, GUILayout.Width(118f * tz), GUILayout.Height(38f * tz)))
+            pendingChooseLanguage = true;
+        if (companion != null && followAfterConversation)
+        {
+            string stayLabel = stayPut ? T("Follow me", "Prati me") : T("Stay here", "Ostani ovdje");
+            if (GUILayout.Button(stayLabel, smallButtonStyle, GUILayout.Width(158f * tz), GUILayout.Height(38f * tz)))
+                pendingToggleStay = true;
+        }
+        if (GUILayout.Button(T("Leave", "Zatvori"), smallButtonStyle, GUILayout.Width(110f * tz), GUILayout.Height(38f * tz)))
+            pendingLeave = true;
+        GUILayout.EndHorizontal();
 
-        // conversation log
+        // thin divider
+        GUILayout.Space(6f);
+        Rect line = GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true));
+        Color prev = GUI.color;
+        GUI.color = new Color(1f, 1f, 1f, 0.12f);
+        GUI.DrawTexture(line, Texture2D.whiteTexture);
+        GUI.color = prev;
+        GUILayout.Space(8f);
+
+        // ---- conversation: speech bubbles (NPC on the left, player on the right)
         if (scrollFrames > 0)
         {
             scroll.y = float.MaxValue;
             if (e.type == EventType.Repaint) scrollFrames--;
         }
-        scroll = GUILayout.BeginScrollView(scroll, GUILayout.ExpandHeight(true));
+        scroll = GUILayout.BeginScrollView(scroll, false, false, GUIStyle.none, scrollbarStyle, GUILayout.ExpandHeight(true));
+        float maxBubble = inner * 0.78f;
         foreach (Line l in log)
         {
-            string who = l.fromPlayer ? T("You: ", "Ti: ") : DisplayName + ": ";
-            GUILayout.Label(who + l.text, l.fromPlayer ? playerLineStyle : npcLineStyle);
+            GUILayout.BeginHorizontal();
+            if (l.fromPlayer)
+            {
+                GUILayout.FlexibleSpace();
+                GUILayout.Label(l.text, playerBubbleStyle, GUILayout.MaxWidth(maxBubble));
+            }
+            else
+            {
+                GUILayout.Label(l.text, npcBubbleStyle, GUILayout.MaxWidth(maxBubble));
+                GUILayout.FlexibleSpace();
+            }
+            GUILayout.EndHorizontal();
         }
-        if (waiting) GUILayout.Label(DisplayName + T(" is thinking...", " razmišlja..."), thinkStyle);
+        if (waiting)
+        {
+            string dots = new string('.', 1 + (int)(Time.unscaledTime * 2.5f) % 3);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(DisplayName + T(" is thinking", " razmišlja") + dots, thinkStyle);
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+        }
         GUILayout.EndScrollView();
 
         if (status.Length > 0) GUILayout.Label(status, statusStyle);
+        GUILayout.Space(8f);
 
-        // input row (or the Yes / No question after the NPC offered to lead the way)
-        if (offering)
+        // ---- bottom: a list to pick from, the Yes / No question, or the text box
+        if (choosing && choices != null)
         {
+            for (int i = 0; i < choices.Count; i++)
+            {
+                string label = (i + 1) + ".   " + choices[i].NameFor(language) + "      [" + (i + 1) + "]";
+                if (GUILayout.Button(label, choiceButtonStyle, GUILayout.Height(46f))) pendingChoicePick = i;
+            }
+            if (GUILayout.Button(T("None of them   [0]", "Nijedno   [0]"), choiceButtonStyle, GUILayout.Height(42f)))
+                pendingChoicePick = -2;
+        }
+        else if (offering)
+        {
+            bool facts = offerKind == OfferKind.Facts;
+            float half = (inner - 12f) / 2f;
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button(T("Yes, lead the way   [1]", "Da, vodi me   [1]"), buttonStyle, GUILayout.Height(46f)))
+            string yesLabel = facts ? T("Yes, tell me   [1]", "Da, ispričaj   [1]") : T("Yes, lead the way   [1]", "Da, vodi me   [1]");
+            if (GUILayout.Button(yesLabel, yesButtonStyle, GUILayout.Width(half), GUILayout.Height(58f)))
                 pendingOfferChoice = 0;
-            GUILayout.Space(10f);
-            if (GUILayout.Button(T("No, thanks   [2]", "Ne, hvala   [2]"), buttonStyle, GUILayout.Height(46f)))
+            GUILayout.Space(12f);
+            if (GUILayout.Button(T("No, thanks   [2]", "Ne, hvala   [2]"), buttonStyle, GUILayout.Width(half), GUILayout.Height(58f)))
                 pendingOfferChoice = 1;
             GUILayout.EndHorizontal();
         }
         else
         {
-            GUILayout.BeginHorizontal();
-
             bool enter = e.type == EventType.KeyDown
                          && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
                          && GUI.GetNameOfFocusedControl() == "ChatInput";
@@ -890,19 +1112,23 @@ public class NPCDialogue : MonoBehaviour
             // ignore the key that opened the dialogue so it isn't typed into the box
             if (Time.unscaledTime < openedTime + 0.2f) inputText = "";
 
+            float sendWidth = 130f * tz;
+            float fieldWidth = inner - sendWidth - 10f;   // FIXED width: long text scrolls inside the box, buttons stay put
+
+            GUILayout.BeginHorizontal();
             GUI.SetNextControlName("ChatInput");
-            inputText = GUILayout.TextField(inputText, 300, inputStyle, GUILayout.Height(36f));
+            inputText = GUILayout.TextField(inputText, 300, inputStyle, GUILayout.Width(fieldWidth), GUILayout.Height(52f * tz));
 
-            if (GUILayout.Button(T("Send", "Pošalji"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingSend = true;
-            if (GUILayout.Button(T("Language", "Jezik"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingChooseLanguage = true;
-            if (companion != null && followAfterConversation)
+            if (e.type == EventType.Repaint && inputText.Length == 0)
             {
-                string stayLabel = stayPut ? T("Follow me", "Prati me") : T("Stay here", "Ostani ovdje");
-                if (GUILayout.Button(stayLabel, buttonStyle, GUILayout.Width(130f), GUILayout.Height(36f)))
-                    pendingToggleStay = true;
+                Rect fr = GUILayoutUtility.GetLastRect();
+                GUI.Label(new Rect(fr.x + 20f, fr.y, fr.width - 28f, fr.height),
+                          T("Type a message and press Enter...", "Napiši poruku i pritisni Enter..."), hintStyle);
             }
-            if (GUILayout.Button(T("Leave", "Zatvori"), buttonStyle, GUILayout.Width(96f), GUILayout.Height(36f))) pendingLeave = true;
 
+            GUILayout.Space(10f);
+            if (GUILayout.Button(T("Send", "Pošalji"), accentButtonStyle, GUILayout.Width(sendWidth), GUILayout.Height(52f * tz)))
+                pendingSend = true;
             GUILayout.EndHorizontal();
         }
         GUILayout.EndArea();
@@ -914,54 +1140,213 @@ public class NPCDialogue : MonoBehaviour
         }
     }
 
+    // ------------------------------------------------------------------ look (fonts, colours, rounded boxes)
+
+    // A rounded rectangle texture with an optional outline, stretched with 9-slice (see GUIStyle.border)
+    private Texture2D MakeRounded(Color fill, Color outline, int radius, float outlineWidth)
+    {
+        int size = radius * 2 + 4;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp
+        };
+
+        float half = size / 2f;
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                // signed distance to the rounded box (negative inside)
+                float px = Mathf.Abs(x + 0.5f - half) - (half - radius);
+                float py = Mathf.Abs(y + 0.5f - half) - (half - radius);
+                float d = new Vector2(Mathf.Max(px, 0f), Mathf.Max(py, 0f)).magnitude + Mathf.Min(Mathf.Max(px, py), 0f) - radius;
+
+                float outer = Mathf.Clamp01(0.5f - d);                      // inside the shape
+                float inside = Mathf.Clamp01(0.5f - (d + outlineWidth));    // inside the outline
+                Color c = Color.Lerp(outline, fill, inside);
+                c.a *= outer;
+                tex.SetPixel(x, y, c);
+            }
+        }
+        tex.Apply();
+        uiTextures.Add(tex);
+        return tex;
+    }
+
+    // Applies the chat font to a style (the bold font for bold styles, if there is one)
+    private void SetFont(GUIStyle style)
+    {
+        style.fontSize = Mathf.RoundToInt(style.fontSize * textSize);
+        if (chatFont == null) return;
+        if (style.fontStyle == FontStyle.Bold && chatFontBold != null)
+        {
+            style.font = chatFontBold;
+            style.fontStyle = FontStyle.Normal;
+        }
+        else style.font = chatFont;
+    }
+
+    private void Apply(GUIStyle style, Texture2D normal, Texture2D hover, Texture2D active, Color text, int radius)
+    {
+        style.normal.background = normal;
+        style.hover.background = hover != null ? hover : normal;
+        style.active.background = active != null ? active : normal;
+        style.focused.background = style.normal.background;
+        style.normal.textColor = style.hover.textColor = style.active.textColor = style.focused.textColor = text;
+        style.border = new RectOffset(radius + 1, radius + 1, radius + 1, radius + 1);
+        SetFont(style);
+    }
+
+    private GUIStyle MakeButton(Color normal, Color hover, Color active, int fontSize, FontStyle fontStyle,
+                                TextAnchor anchor = TextAnchor.MiddleCenter)
+    {
+        var style = new GUIStyle(GUI.skin.button)
+        {
+            fontSize = fontSize,
+            fontStyle = fontStyle,
+            alignment = anchor,
+            padding = new RectOffset(16, 16, 6, 6),
+            margin = new RectOffset(4, 4, 4, 4)
+        };
+        Apply(style, MakeRounded(normal, new Color(1f, 1f, 1f, 0.08f), 10, 1f),
+                     MakeRounded(hover, new Color(1f, 1f, 1f, 0.18f), 10, 1f),
+                     MakeRounded(active, new Color(1f, 1f, 1f, 0.05f), 10, 1f),
+                     Color.white, 10);
+        return style;
+    }
+
+    private GUIStyle MakeBubble(Color fill, Color text)
+    {
+        var style = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 23,
+            wordWrap = true,
+            alignment = TextAnchor.UpperLeft,
+            richText = false,
+            padding = new RectOffset(18, 18, 11, 13),
+            margin = new RectOffset(2, 2, 4, 4)
+        };
+        Apply(style, MakeRounded(fill, Color.clear, 16, 0f), null, null, text, 16);
+        return style;
+    }
+
     private void EnsureStyles()
     {
-        if (boxStyle != null) return;
+        if (boxStyle != null)
+        {
+            if (Mathf.Approximately(builtTextSize, textSize)) return;
 
-        panelTex = new Texture2D(1, 1);
-        panelTex.SetPixel(0, 0, new Color(0.05f, 0.06f, 0.09f, 0.9f));
-        panelTex.Apply();
+            // the text size changed: rebuild everything
+            foreach (Texture2D t in uiTextures) if (t != null) Destroy(t);
+            uiTextures.Clear();
+            if (chatSkin != null) Destroy(chatSkin);
+        }
+        builtTextSize = textSize;
 
-        boxStyle = new GUIStyle(GUI.skin.box) { normal = { background = panelTex } };
+        // Font: the one you assigned, or Atkinson Hyperlegible from Resources/Fonts, or the computer's own
+        chatFont = uiFont != null ? uiFont : Resources.Load<Font>("Fonts/AtkinsonHyperlegible_400Regular");
+        chatFontBold = uiFontBold != null ? uiFontBold : Resources.Load<Font>("Fonts/AtkinsonHyperlegible_700Bold");
+        if (chatFont == null)
+        {
+            try
+            {
+                chatFont = Font.CreateDynamicFontFromOSFont(
+                    new[] { "Segoe UI", "Calibri", "Arial", "Helvetica Neue", "Helvetica", "Liberation Sans" }, 22);
+            }
+            catch (Exception) { chatFont = null; }
+        }
 
+        // our own copy of the skin, so scrollbars and the text cursor look right without touching anything else
+        chatSkin = Instantiate(GUI.skin);
+        chatSkin.settings.cursorColor = Color.white;
+        chatSkin.settings.selectionColor = new Color(0.25f, 0.5f, 0.95f, 0.5f);
+        if (chatFont != null) chatSkin.font = chatFont;
+
+        Color white = Color.white;
+
+        // panel + pills
+        Texture2D panelTex = MakeRounded(new Color(0.07f, 0.08f, 0.12f, 0.95f), new Color(1f, 1f, 1f, 0.10f), 20, 1.5f);
+        boxStyle = new GUIStyle(GUI.skin.box) { border = new RectOffset(21, 21, 21, 21), padding = new RectOffset(0, 0, 0, 0) };
+        boxStyle.normal.background = panelTex;
+        SetFont(boxStyle);
+
+        Texture2D pillTex = MakeRounded(new Color(0.07f, 0.08f, 0.12f, 0.93f), new Color(1f, 1f, 1f, 0.12f), 22, 1.5f);
         promptStyle = new GUIStyle(GUI.skin.box)
         {
-            fontSize = 19,
+            fontSize = 23,
+            fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleCenter,
-            normal = { background = panelTex, textColor = Color.white }
+            border = new RectOffset(23, 23, 23, 23)
         };
+        promptStyle.normal.background = pillTex;
+        promptStyle.normal.textColor = white;
+        SetFont(promptStyle);
 
         nameStyle = new GUIStyle(GUI.skin.label)
         {
-            fontSize = 22,
+            fontSize = 28,
             fontStyle = FontStyle.Bold,
-            normal = { textColor = new Color(1f, 0.85f, 0.5f) }
+            alignment = TextAnchor.MiddleLeft
         };
+        nameStyle.normal.textColor = new Color(1f, 0.86f, 0.55f);
+        SetFont(nameStyle);
 
-        npcLineStyle = new GUIStyle(GUI.skin.label)
+        // bubbles
+        npcBubbleStyle = MakeBubble(new Color(0.16f, 0.19f, 0.27f, 1f), white);
+        playerBubbleStyle = MakeBubble(new Color(0.18f, 0.40f, 0.80f, 1f), white);
+        thinkStyle = MakeBubble(new Color(0.13f, 0.15f, 0.21f, 1f), new Color(0.72f, 0.76f, 0.85f));
+        thinkStyle.fontStyle = FontStyle.Italic;
+
+        statusStyle = new GUIStyle(GUI.skin.label) { fontSize = 19, wordWrap = true };
+        statusStyle.normal.textColor = new Color(1f, 0.6f, 0.6f);
+        SetFont(statusStyle);
+
+        // text box: one line, clipped, fixed width (set where it is drawn)
+        inputStyle = new GUIStyle(GUI.skin.textField)
         {
-            fontSize = 18,
-            wordWrap = true,
-            normal = { textColor = Color.white }
+            fontSize = 23,
+            alignment = TextAnchor.MiddleLeft,
+            wordWrap = false,
+            clipping = TextClipping.Clip,
+            padding = new RectOffset(18, 18, 8, 8),
+            margin = new RectOffset(4, 4, 4, 4)
         };
+        Texture2D fieldTex = MakeRounded(new Color(0.11f, 0.13f, 0.19f, 1f), new Color(1f, 1f, 1f, 0.14f), 12, 1.5f);
+        Texture2D fieldFocus = MakeRounded(new Color(0.11f, 0.13f, 0.19f, 1f), new Color(0.40f, 0.65f, 1f, 0.95f), 12, 1.5f);
+        inputStyle.normal.background = fieldTex;
+        inputStyle.hover.background = fieldTex;
+        inputStyle.focused.background = fieldFocus;
+        inputStyle.active.background = fieldFocus;
+        inputStyle.normal.textColor = inputStyle.hover.textColor = inputStyle.focused.textColor = inputStyle.active.textColor = white;
+        inputStyle.border = new RectOffset(13, 13, 13, 13);
+        SetFont(inputStyle);
 
-        playerLineStyle = new GUIStyle(npcLineStyle) { normal = { textColor = new Color(0.65f, 0.85f, 1f) } };
+        hintStyle = new GUIStyle(GUI.skin.label) { fontSize = 23, alignment = TextAnchor.MiddleLeft, clipping = TextClipping.Clip };
+        hintStyle.normal.textColor = new Color(1f, 1f, 1f, 0.38f);
+        SetFont(hintStyle);
 
-        thinkStyle = new GUIStyle(npcLineStyle)
-        {
-            fontStyle = FontStyle.Italic,
-            normal = { textColor = new Color(0.7f, 0.7f, 0.7f) }
-        };
+        // buttons
+        Color neutral = new Color(0.20f, 0.23f, 0.31f, 1f);
+        buttonStyle = MakeButton(neutral, new Color(0.28f, 0.32f, 0.43f, 1f), new Color(0.15f, 0.17f, 0.24f, 1f), 22, FontStyle.Bold);
+        smallButtonStyle = MakeButton(neutral, new Color(0.28f, 0.32f, 0.43f, 1f), new Color(0.15f, 0.17f, 0.24f, 1f), 19, FontStyle.Normal);
+        smallButtonStyle.padding = new RectOffset(8, 8, 4, 4);
+        accentButtonStyle = MakeButton(new Color(0.20f, 0.44f, 0.86f, 1f), new Color(0.27f, 0.52f, 0.95f, 1f), new Color(0.15f, 0.34f, 0.70f, 1f), 22, FontStyle.Bold);
+        yesButtonStyle = MakeButton(new Color(0.17f, 0.55f, 0.36f, 1f), new Color(0.22f, 0.65f, 0.43f, 1f), new Color(0.12f, 0.43f, 0.28f, 1f), 22, FontStyle.Bold);
+        choiceButtonStyle = MakeButton(neutral, new Color(0.28f, 0.32f, 0.43f, 1f), new Color(0.15f, 0.17f, 0.24f, 1f), 22, FontStyle.Normal, TextAnchor.MiddleLeft);
+        bigButtonStyle = MakeButton(new Color(0.20f, 0.44f, 0.86f, 1f), new Color(0.27f, 0.52f, 0.95f, 1f), new Color(0.15f, 0.34f, 0.70f, 1f), 27, FontStyle.Bold);
 
-        statusStyle = new GUIStyle(GUI.skin.label)
-        {
-            fontSize = 15,
-            wordWrap = true,
-            normal = { textColor = new Color(1f, 0.55f, 0.55f) }
-        };
-
-        inputStyle = new GUIStyle(GUI.skin.textField) { fontSize = 18, alignment = TextAnchor.MiddleLeft };
-        buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 17 };
-        bigButtonStyle = new GUIStyle(GUI.skin.button) { fontSize = 22, fontStyle = FontStyle.Bold };
+        // slim scrollbar
+        scrollbarStyle = new GUIStyle(chatSkin.verticalScrollbar) { fixedWidth = 8f, margin = new RectOffset(6, 0, 2, 2) };
+        scrollbarStyle.normal.background = MakeRounded(new Color(1f, 1f, 1f, 0.06f), Color.clear, 4, 0f);
+        scrollbarStyle.border = new RectOffset(5, 5, 5, 5);
+        GUIStyle thumb = chatSkin.verticalScrollbarThumb;
+        thumb.fixedWidth = 8f;
+        thumb.normal.background = MakeRounded(new Color(1f, 1f, 1f, 0.30f), Color.clear, 4, 0f);
+        thumb.hover.background = thumb.active.background = thumb.focused.background = thumb.normal.background;
+        thumb.border = new RectOffset(5, 5, 5, 5);
+        chatSkin.verticalScrollbarUpButton.fixedHeight = 0f;
+        chatSkin.verticalScrollbarDownButton.fixedHeight = 0f;
     }
 }
