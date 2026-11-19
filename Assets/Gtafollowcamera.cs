@@ -42,6 +42,14 @@ public class GTAFollowCamera : MonoBehaviour
     [Tooltip("How long the camera takes to move back out after a wall stops blocking it.")]
     [SerializeField] private float collisionRecoverTime = 0.25f;
 
+    [Header("Free look (used while the player auto-follows a guide)")]
+    [Tooltip("After the last look / zoom input the camera stays where you put it for this many seconds, then swings back behind the player.")]
+    [SerializeField] private float lookHoldSeconds = 4f;
+    [SerializeField] private float minPitch = -8f;
+    [SerializeField] private float maxPitch = 75f;
+    [SerializeField] private float minZoom = 0.5f;
+    [SerializeField] private float maxZoom = 3f;
+
     /// <summary>The object this camera follows (used by SetupDiagnostics).</summary>
     public Transform Target => target;
 
@@ -52,6 +60,42 @@ public class GTAFollowCamera : MonoBehaviour
     private float smoothedY;
     private float currentLen;
     private float lenVel;
+
+    // free look
+    private float freeUntil;
+    private float freeBlend;
+    private float freePitch;
+    private float freeZoom = 1f;
+
+    private bool FreeActive => Time.time < freeUntil || freeBlend > 0.01f;
+
+    private void BeginFreeIfNeeded()
+    {
+        if (!FreeActive) freePitch = Mathf.Atan2(height - lookHeight, distance) * Mathf.Rad2Deg;
+        freeUntil = Time.time + lookHoldSeconds;
+    }
+
+    /// <summary>Orbit around the player (degrees). Call every frame while the player is looking around.</summary>
+    public void FreeLook(float yawDelta, float pitchDelta)
+    {
+        BeginFreeIfNeeded();
+        yaw += yawDelta;
+        yawVel = 0f;
+        freePitch = Mathf.Clamp(freePitch - pitchDelta, minPitch, maxPitch);
+    }
+
+    /// <summary>Zoom in / out while free-looking (positive = in).</summary>
+    public void Zoom(float amount)
+    {
+        BeginFreeIfNeeded();
+        freeZoom = Mathf.Clamp(freeZoom - amount, minZoom, maxZoom);
+    }
+
+    /// <summary>Goes back to the normal chase camera right away.</summary>
+    public void ResetLook()
+    {
+        freeUntil = 0f;
+    }
 
     private void Awake()
     {
@@ -101,6 +145,7 @@ public class GTAFollowCamera : MonoBehaviour
             yaw = TargetYaw();
             yawVel = 0f;
             smoothedY = anchorY;
+            freeBlend = 0f;
             lastTargetPos = target.position;
         }
         else
@@ -112,7 +157,9 @@ public class GTAFollowCamera : MonoBehaviour
             lastTargetPos = target.position;
 
             // Orbit speed is capped, and eased in and out, so the camera never whips around.
-            float wantedYaw = (!swingOnlyWhileMoving || moving) ? TargetYaw() : yaw;
+            bool free = Time.time < freeUntil;
+            freeBlend = Mathf.MoveTowards(freeBlend, free ? 1f : 0f, dt * 2.5f);
+            float wantedYaw = (!free && (!swingOnlyWhileMoving || moving)) ? TargetYaw() : yaw;
             yaw = Mathf.SmoothDampAngle(yaw, wantedYaw, ref yawVel, swingSmoothTime, maxSwingSpeed, dt);
 
             smoothedY = Mathf.Lerp(smoothedY, anchorY, 1f - Mathf.Exp(-verticalSmoothing * dt));
@@ -127,6 +174,11 @@ public class GTAFollowCamera : MonoBehaviour
 
         // The camera's ideal spot: always the same offset from the player
         Vector3 ideal = aim + yawRot * new Vector3(0f, height - lookHeight, -distance);
+        if (freeBlend > 0.001f)
+        {
+            Vector3 idealFree = aim + Quaternion.Euler(freePitch, yaw, 0f) * new Vector3(0f, 0f, -distance * freeZoom);
+            ideal = Vector3.Lerp(ideal, idealFree, freeBlend);
+        }
         Vector3 toIdeal = ideal - anchor;
         float fullLen = toIdeal.magnitude;
 

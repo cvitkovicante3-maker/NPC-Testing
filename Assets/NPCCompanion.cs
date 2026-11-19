@@ -74,6 +74,12 @@ public class NPCCompanion : MonoBehaviour
     /// <summary>Current speed. Handy for driving an Animator.</summary>
     public float CurrentSpeed { get; private set; }
 
+    /// <summary>Normal walking speed while leading (before the speed scale).</summary>
+    public float GuideSpeed => guideSpeed;
+
+    /// <summary>Multiplies the guiding speed (1 = normal, 0.5 = half). Used by the speed gauge during auto-follow.</summary>
+    public float GuideSpeedScale { get; set; } = 1f;
+
     private Transform target;
     private bool paused;
     private Vector3 velocity;
@@ -357,7 +363,7 @@ public class NPCCompanion : MonoBehaviour
             {
                 // go a bit slower when the player is lagging behind
                 float closeness = Mathf.InverseLerp(guideWaitDistance, guideResumeDistance, playerDistance);
-                desired = corner.normalized * guideSpeed * Mathf.Lerp(0.4f, 1f, closeness);
+                desired = corner.normalized * guideSpeed * GuideSpeedScale * Mathf.Lerp(0.4f, 1f, closeness);
             }
         }
 

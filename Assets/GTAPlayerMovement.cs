@@ -33,6 +33,10 @@ public class GTAPlayerMovement : MonoBehaviour
     [Tooltip("Turn slower while sprinting, for a heavier feel (1 = no change).")]
     [Range(0.3f, 1f)][SerializeField] private float sprintTurnMultiplier = 0.7f;
 
+    [Header("Autopilot (while a guide leads the player)")]
+    [Tooltip("How fast the character turns toward where it is being led, in degrees per second.")]
+    [SerializeField] private float autopilotTurnSpeed = 300f;
+
     [Header("Jump & Gravity")]
     [SerializeField] private float jumpHeight = 1.1f;
     [SerializeField] private float gravity = -22f;
@@ -40,6 +44,24 @@ public class GTAPlayerMovement : MonoBehaviour
     /// <summary>Forward speed (negative when walking backwards). Handy for an Animator.</summary>
     public float CurrentSpeed => currentSpeed;
     public bool IsGrounded => controller.isGrounded;
+
+    /// <summary>True while a script is steering the character (see SetAutopilot).</summary>
+    public bool AutopilotActive { get; private set; }
+
+    /// <summary>
+    /// True while the player is pressing W / A / S / D or pushing the stick (works during autopilot too).
+    /// The arrow keys are NOT included: during auto-follow they look around.
+    /// </summary>
+    public bool HasManualInput
+    {
+        get
+        {
+            Keyboard kb = Keyboard.current;
+            if (kb != null && (kb.wKey.isPressed || kb.aKey.isPressed || kb.sKey.isPressed || kb.dKey.isPressed)) return true;
+            Gamepad pad = Gamepad.current;
+            return pad != null && pad.leftStick.ReadValue().sqrMagnitude > 0.25f;
+        }
+    }
 
     private CharacterController controller;
     private InputAction moveAction;
@@ -49,6 +71,23 @@ public class GTAPlayerMovement : MonoBehaviour
     private float currentSpeed;
     private float smoothedTurn;
     private float verticalVelocity;
+    private Vector3 autoDirection;
+    private float autoSpeed;
+
+    /// <summary>Steers the character: walk toward 'worldDirection' at 'speed'. Call every frame; the keyboard is ignored meanwhile.</summary>
+    public void SetAutopilot(Vector3 worldDirection, float speed)
+    {
+        AutopilotActive = true;
+        autoDirection = worldDirection;
+        autoSpeed = speed;
+    }
+
+    /// <summary>Gives the keyboard back to the player.</summary>
+    public void StopAutopilot()
+    {
+        AutopilotActive = false;
+        autoSpeed = 0f;
+    }
 
     private void Awake()
     {
@@ -108,6 +147,7 @@ public class GTAPlayerMovement : MonoBehaviour
 
     private void OnDisable()
     {
+        AutopilotActive = false;
         moveAction.Disable();
         jumpAction.Disable();
         sprintAction.Disable();
@@ -117,17 +157,36 @@ public class GTAPlayerMovement : MonoBehaviour
     {
         float dt = Time.deltaTime;
         KeepUpright();
-        Vector2 input = moveAction.ReadValue<Vector2>();
+        Vector2 input = AutopilotActive ? Vector2.zero : moveAction.ReadValue<Vector2>();
         bool sprinting = sprintAction.IsPressed() && input.y > 0.1f;
 
-        // --- Turning (A / D) ---
-        float turnMult = sprinting ? sprintTurnMultiplier : 1f;
-        smoothedTurn = Mathf.Lerp(smoothedTurn, input.x, 1f - Mathf.Exp(-turnSmoothing * dt));
-        transform.Rotate(0f, smoothedTurn * turnSpeed * turnMult * dt, 0f);
+        float targetSpeed;
+        if (AutopilotActive)
+        {
+            // --- Autopilot: turn toward the wanted direction and walk there ---
+            smoothedTurn = 0f;
+            targetSpeed = 0f;
+            Vector3 wanted = autoDirection;
+            wanted.y = 0f;
+            if (wanted.sqrMagnitude > 0.0001f && autoSpeed > 0.01f)
+            {
+                Quaternion look = Quaternion.LookRotation(wanted.normalized, Vector3.up);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, look, autopilotTurnSpeed * dt);
+                float angle = Quaternion.Angle(transform.rotation, look);
+                targetSpeed = autoSpeed * Mathf.Clamp01(1f - angle / 80f);   // turn first, then walk
+            }
+        }
+        else
+        {
+            // --- Turning (A / D) ---
+            float turnMult = sprinting ? sprintTurnMultiplier : 1f;
+            smoothedTurn = Mathf.Lerp(smoothedTurn, input.x, 1f - Mathf.Exp(-turnSmoothing * dt));
+            transform.Rotate(0f, smoothedTurn * turnSpeed * turnMult * dt, 0f);
 
-        // --- Forward / backward (W / S) ---
-        float targetSpeed = input.y * (sprinting ? sprintSpeed : runSpeed);
-        if (input.y < 0f) targetSpeed *= backwardSpeedMultiplier;
+            // --- Forward / backward (W / S) ---
+            targetSpeed = input.y * (sprinting ? sprintSpeed : runSpeed);
+            if (input.y < 0f) targetSpeed *= backwardSpeedMultiplier;
+        }
 
         float rate = Mathf.Abs(targetSpeed) > Mathf.Abs(currentSpeed) ? acceleration : deceleration;
         currentSpeed = Mathf.MoveTowards(currentSpeed, targetSpeed, rate * dt);
@@ -136,7 +195,7 @@ public class GTAPlayerMovement : MonoBehaviour
         if (controller.isGrounded && verticalVelocity < 0f)
             verticalVelocity = -2f;
 
-        if (controller.isGrounded && jumpAction.WasPressedThisFrame())
+        if (!AutopilotActive && controller.isGrounded && jumpAction.WasPressedThisFrame())
             verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
 
         verticalVelocity += gravity * dt;

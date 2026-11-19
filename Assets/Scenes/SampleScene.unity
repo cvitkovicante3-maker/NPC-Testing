@@ -448,6 +448,7 @@ MonoBehaviour:
   companion: {fileID: 0}
   followAfterConversation: 1
   offerNavigation: 1
+  offerAutoFollow: 1
   offerFactsOnArrival: 1
   player: {fileID: 2055975601}
   interactKey: 19
@@ -459,6 +460,8 @@ MonoBehaviour:
   uiFontBold: {fileID: 0}
   uiScale: 1
   textSize: 1.15
+  maxReplyTokens: 120
+  maxHistoryMessages: 12
   showDebugInfo: 1
 --- !u!114 &147085889
 MonoBehaviour:
@@ -709,6 +712,11 @@ MonoBehaviour:
     m_Bits: 4294967295
   wallPadding: 0.25
   collisionRecoverTime: 0.25
+  lookHoldSeconds: 4
+  minPitch: -8
+  maxPitch: 75
+  minZoom: 0.5
+  maxZoom: 3
 --- !u!114 &330585550
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1808,6 +1816,105 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 2, y: 2, z: 2}
   m_Center: {x: 0, y: 0, z: 0}
+--- !u!1001 &2031874304
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 100000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_Name
+      value: Hotel Ante
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalScale.x
+      value: 0.05
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalScale.y
+      value: 0.1
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalScale.z
+      value: 0.1
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 63
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0.33670816
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: -85.7
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 400000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 400002, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: -5
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 100000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 2031874306}
+  m_SourcePrefab: {fileID: 100100000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+--- !u!1 &2031874305 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 100000, guid: 42350cecc2959a246a2afc7215b375c5, type: 3}
+  m_PrefabInstance: {fileID: 2031874304}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &2031874306
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2031874305}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 74058e1060dd72f4d982246f10d8e754, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::NPCDestination
+  nameEnglish: Hotel Ante
+  nameCroatian: Hotel Ante
+  keywords:
+  - Hotel
+  - hotel
+  arriveDistance: 4
 --- !u!1 &2055975600
 GameObject:
   m_ObjectHideFlags: 0
@@ -1920,6 +2027,7 @@ MonoBehaviour:
   turnSpeed: 150
   turnSmoothing: 12
   sprintTurnMultiplier: 0.7
+  autopilotTurnSpeed: 300
   jumpHeight: 1.1
   gravity: -22
 --- !u!143 &2055975606
@@ -2034,3 +2142,4 @@ SceneRoots:
   - {fileID: 1235555280}
   - {fileID: 2098628544}
   - {fileID: 139713013}
+  - {fileID: 2031874304}

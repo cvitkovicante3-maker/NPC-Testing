@@ -82,6 +82,8 @@ public class NPCDialogue : MonoBehaviour
     [Header("Navigation (leading the player to places)")]
     [Tooltip("When the player asks where a marked place is (see NPCDestination), the NPC offers to lead the way. Needs an NPCCompanion.")]
     [SerializeField] private bool offerNavigation = true;
+    [Tooltip("Before leading the way, ask whether the player wants to walk there themselves or let the character auto-follow the mouse (with a free camera and a speed gauge).")]
+    [SerializeField] private bool offerAutoFollow = true;
     [Tooltip("When the NPC has led the player to a place, it stops, opens the chat and asks whether the player wants to hear facts about it.")]
     [SerializeField] private bool offerFactsOnArrival = true;
 
@@ -105,6 +107,12 @@ public class NPCDialogue : MonoBehaviour
     [Tooltip("Makes only the TEXT bigger or smaller (the panel and buttons stay the same size). Changes apply immediately, also while the game is running.")]
     [Range(0.7f, 2f)][SerializeField] private float textSize = 1.15f;
 
+    [Header("Speed (local model)")]
+    [Tooltip("Longest reply the model may write, in tokens. Replies are meant to be 1-3 sentences, so 100-140 is plenty and saves a lot of waiting. 0 = don't change the LLM Agent's own setting.")]
+    [SerializeField] private int maxReplyTokens = 120;
+    [Tooltip("The model re-reads the whole conversation for every answer, so a long conversation gets slower. When the history gets longer than this many messages, the oldest ones are dropped (the character description is kept). 0 = never drop.")]
+    [SerializeField] private int maxHistoryMessages = 12;
+
     [Header("Troubleshooting")]
     [Tooltip("Shows a yellow status line at the top-left of the Game view. Turn off once everything works.")]
     [SerializeField] private bool showDebugInfo = false;
@@ -123,7 +131,7 @@ public class NPCDialogue : MonoBehaviour
     private NPCDestination activeOffer;         // the place being offered right now
     private bool offering;                      // showing the Yes / No buttons
     private int pendingOfferChoice = -1;        // 0 = yes, 1 = no (set by buttons / keys)
-    private enum OfferKind { Guide, Facts }
+    private enum OfferKind { Guide, Facts, Mode }
     private OfferKind offerKind = OfferKind.Guide;   // what the Yes / No buttons are about
     private string factsTopic;                  // set while asking for facts about a place (used to look them up)
     private List<NPCDestination> pendingChoices;     // several places match: waiting for the NPC's reply
@@ -154,6 +162,9 @@ public class NPCDialogue : MonoBehaviour
                      choiceButtonStyle, bigButtonStyle, scrollbarStyle;
     private GUISkin chatSkin;
     private float builtTextSize;
+    private GUIStyle sliderTrackStyle, sliderFillStyle, sliderThumbStyle, hudTitleStyle, hudHintStyle;
+    private PlayerAutoFollow trip;              // auto-follow mode (added automatically)
+    private GTAFollowCamera followCamera;
     private Font chatFont, chatFontBold;
     private readonly List<Texture2D> uiTextures = new List<Texture2D>();
 
@@ -177,6 +188,9 @@ public class NPCDialogue : MonoBehaviour
         if (agent == null) agent = GetComponent<LLMUnity.LLMAgent>();
         if (agent == null)
             Debug.LogWarning($"{name}: NPCDialogue needs an 'LLM Agent' component on this object.", this);
+
+        LimitReplyLength();
+        followCamera = FindFirstObjectByType<GTAFollowCamera>();
 
         follower = GetComponent<NPCSplineFollower>();
         if (companion == null) companion = GetComponent<NPCCompanion>();
@@ -233,7 +247,8 @@ public class NPCDialogue : MonoBehaviour
             pendingOfferChoice = -1;
             if (talking && offering)
             {
-                if (choice == 0) AcceptOffer();
+                if (offerKind == OfferKind.Mode) StartGuide(choice == 1);   // 1 = walk myself, 2 = auto-follow
+                else if (choice == 0) AcceptOffer();
                 else DeclineOffer();
             }
         }
@@ -420,8 +435,8 @@ public class NPCDialogue : MonoBehaviour
             return;
         }
 
-        // "Take me to the church": an order. No need to ask the model; the mouse answers and leads the way.
-        if (visible && TryDirectGuide(text)) return;
+        // Where-is questions and "take me to..." orders about known places are answered instantly (no model, no waiting).
+        if (visible && TryInstantNavigation(text)) return;
 
         lastPlayerLine = null;
         lastPlayerText = visible ? text : null;
@@ -445,6 +460,7 @@ public class NPCDialogue : MonoBehaviour
         sendBriefing = false;
         query += text + "\n\n" + LanguageReminder();
 
+        TrimHistory();
         _ = AskAsync(query);
     }
 
@@ -467,28 +483,61 @@ public class NPCDialogue : MonoBehaviour
         list.Sort((x, y) => (x.transform.position - p).sqrMagnitude.CompareTo((y.transform.position - p).sqrMagnitude));
     }
 
-    // A direct order to be led somewhere. Replies with a fixed line, then starts guiding a moment later.
-    private bool TryDirectGuide(string text)
+    // "Where is the church?" / "Take me to the church" / "Are there any hotels?": answered instantly by the script
+    // (no waiting for the language model). One place -> a "follow me?" prompt with Yes / No buttons;
+    // several places -> a numbered list to pick from. Unknown places are left to the model.
+    private bool TryInstantNavigation(string text)
     {
         if (!offerNavigation || companion == null || NPCDestination.All.Count == 0) return false;
-        if (!NPCDestination.LooksLikeDirectCommand(text)) return false;
 
         List<NPCDestination> places = PlacesFor(text);
-        if (places.Count != 1) return false;   // nothing named (the model answers), or several (the player picks)
-        NPCDestination place = places[0];
+        if (places.Count == 0) return false;
 
-        lastPlace = place;
+        bool command = NPCDestination.LooksLikeDirectCommand(text);
+        bool intent = command
+                      || NPCDestination.LooksLikeDirectionsRequest(text)
+                      || NPCDestination.LooksLikeExistenceQuestion(text);
+        if (!intent) return false;
+
         pendingOffer = null;
+        pendingChoices = null;
         offering = false;
-        offerKind = OfferKind.Guide;
-        activeOffer = place;
+        choosing = false;
         lastPlayerLine = null;
         lastPlayerText = null;
-
         AddLine(true, text);
+
+        if (places.Count > 1)
+        {
+            SortByDistance(places);
+            if (places.Count > 6) places.RemoveRange(6, places.Count - 6);
+
+            var names = new System.Text.StringBuilder();
+            for (int i = 0; i < places.Count; i++)
+            {
+                if (i > 0) names.Append(", ");
+                names.Append(places[i].NameFor(language));
+            }
+            choices = places;
+            choosing = true;
+            AddLine(false, T("I know several places like that: " + names + ". Which one would you like to visit?",
+                             "Znam nekoliko takvih mjesta: " + names + ". Koje želiš posjetiti?"));
+            return true;
+        }
+
+        NPCDestination place = places[0];
+        lastPlace = place;
+        activeOffer = place;
+        offerKind = OfferKind.Guide;
+        offering = true;
+
         string name = place.NameFor(language);
-        AddLine(false, T("Of course! Follow me to " + name + ".", "Naravno! Slijedi me do: " + name + "."));
-        startGuideAt = Time.unscaledTime + 1.2f;   // long enough to read the answer
+        if (command)
+            AddLine(false, T("Of course! I'll take you to " + name + ". Ready to follow me?",
+                             "Naravno! Odvest ću te do: " + name + ". Jesi li spreman slijediti me?"));
+        else
+            AddLine(false, T("I know exactly where " + name + " is! Shall I take you there?",
+                             "Točno znam gdje je: " + name + "! Želiš li da te odvedem tamo?"));
         return true;
     }
 
@@ -562,14 +611,27 @@ public class NPCDialogue : MonoBehaviour
         }
 
         NPCDestination place = list[pick];
-        lastPlace = place;
-        offerKind = OfferKind.Guide;
-        activeOffer = place;
+        AddLine(true, place.NameFor(language));
+        AskMode(place, T("Good choice! ", "Dobar izbor! "));
+    }
 
-        string name = place.NameFor(language);
-        AddLine(true, name);
-        AddLine(false, T("Good choice! Follow me to " + name + ".", "Dobar izbor! Slijedi me do: " + name + "."));
-        startGuideAt = Time.unscaledTime + 1.2f;
+    // Before the mouse sets off: walk there yourself, or let the character follow the mouse on its own?
+    private void AskMode(NPCDestination place, string lead)
+    {
+        activeOffer = place;
+        lastPlace = place;
+        focusRequested = true;
+
+        if (!offerAutoFollow || playerMovement == null || companion == null)
+        {
+            StartGuide(false);
+            return;
+        }
+
+        offerKind = OfferKind.Mode;
+        offering = true;
+        AddLine(false, lead + T("How would you like to get to " + place.NameFor(language) + "?",
+                                "Kako želiš doći do: " + place.NameFor(language) + "?"));
     }
 
     // "Yes": lead the way (close the chat), or tell facts about the place we are standing at
@@ -577,6 +639,17 @@ public class NPCDialogue : MonoBehaviour
     {
         if (offerKind == OfferKind.Facts) { AcceptFacts(); return; }
 
+        NPCDestination place = activeOffer;
+        offering = false;
+        if (place == null || companion == null) { activeOffer = null; return; }
+
+        AddLine(true, T("Yes, lead the way.", "Da, vodi me."));
+        AskMode(place, T("Great! ", "Super! "));
+    }
+
+    // The mouse sets off now. autoFollow: the character follows it on its own (free camera + speed gauge).
+    private void StartGuide(bool autoFollow)
+    {
         NPCDestination place = activeOffer;
         offering = false;
         activeOffer = null;
@@ -587,6 +660,14 @@ public class NPCDialogue : MonoBehaviour
 
         EndTalking();   // gives the player control back
         companion.StartGuiding(player, place.transform.position, place.ArriveDistance, followAfter, OnGuideArrived);
+
+        if (autoFollow && playerMovement != null)
+        {
+            if (trip == null) trip = GetComponent<PlayerAutoFollow>();
+            if (trip == null) trip = gameObject.AddComponent<PlayerAutoFollow>();
+            if (followCamera == null) followCamera = FindFirstObjectByType<GTAFollowCamera>();
+            trip.Begin(playerMovement, companion, followCamera);
+        }
     }
 
     private void AcceptFacts()
@@ -628,6 +709,7 @@ public class NPCDialogue : MonoBehaviour
     private void OnGuideArrived()
     {
         if (this == null) return;
+        if (trip != null) trip.End();   // controls (and the cursor) back to the player
         NPCDestination place = guidingTo;
         arrivedName = place != null ? place.NameFor(language) : "";
         arrivedUntil = Time.time + 5f;
@@ -749,6 +831,54 @@ public class NPCDialogue : MonoBehaviour
         log.Add(line);
         scrollFrames = 3;
         return line;
+    }
+
+    // Caps how long a reply can get (a shorter reply = less waiting). Uses reflection so it works with any
+    // version of the LLM package; if the setting isn't found nothing happens.
+    private void LimitReplyLength()
+    {
+        if (agent == null || maxReplyTokens <= 0) return;
+        try
+        {
+            var type = agent.GetType();
+            var field = type.GetField("numPredict");
+            if (field != null && field.FieldType == typeof(int))
+            {
+                int current = (int)field.GetValue(agent);
+                if (current < 0 || current > maxReplyTokens) field.SetValue(agent, maxReplyTokens);
+                return;
+            }
+            var prop = type.GetProperty("numPredict");
+            if (prop != null && prop.CanWrite && prop.PropertyType == typeof(int))
+            {
+                int current = (int)prop.GetValue(agent);
+                if (current < 0 || current > maxReplyTokens) prop.SetValue(agent, maxReplyTokens);
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("NPCDialogue: couldn't limit the reply length: " + e.Message, this);
+        }
+    }
+
+    // Keeps the conversation the model has to re-read short. Drops the oldest question/answer pairs in one go
+    // (not one per message), so the model's cached prompt stays valid for several turns in a row.
+    private void TrimHistory()
+    {
+        if (agent == null || maxHistoryMessages <= 0) return;
+        try
+        {
+            var chat = agent.chat;
+            if (chat == null || chat.Count <= maxHistoryMessages) return;
+
+            // keep the system message (if any) and the first exchange, which carries the character description
+            int head = (chat[0] != null && chat[0].role == "system" ? 1 : 0) + 2;
+            int target = Mathf.Max(head + 2, maxHistoryMessages / 2);
+            int remove = Mathf.Min(chat.Count - target, chat.Count - head);
+            remove -= remove % 2;   // whole question + answer pairs
+            if (remove > 0) chat.RemoveRange(head, remove);
+        }
+        catch (Exception) { }
     }
 
     // Removes the last player message and the last reply from the model's memory
@@ -901,6 +1031,7 @@ public class NPCDialogue : MonoBehaviour
         if (showDebugInfo) DrawDebugInfo();
         if (player == null) return;
         DrawGuideBanner();
+        DrawTripHud();
         if (!talking && !InRange()) return;
 
         EnsureStyles();
@@ -934,6 +1065,75 @@ public class NPCDialogue : MonoBehaviour
 
         GUI.matrix = Matrix4x4.identity;
         GUI.skin = previousSkin;
+    }
+
+    // The speed gauge shown while the character auto-follows the mouse
+    private void DrawTripHud()
+    {
+        if (trip == null || !trip.IsActive) return;
+
+        EnsureStyles();
+        float s = Screen.height / 720f * uiScale;
+        GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(s, s, 1f));
+        float vw = Screen.width / s;
+        float vh = Screen.height / s;
+
+        float tz = Mathf.Max(1f, textSize);
+        float rowTitle = 36f * tz;
+        float rowHint = 56f * tz;
+        float w = Mathf.Min(760f, vw - 40f);
+        float h = 14f + rowTitle + 6f + 30f + 8f + rowHint + 10f;
+        var panel = new Rect((vw - w) / 2f, vh - h - 24f, w, h);
+        GUI.Box(panel, GUIContent.none, boxStyle);
+
+        float x = panel.x + 30f;
+        float iw = w - 60f;
+        float y = panel.y + 14f;
+
+        int percent = Mathf.RoundToInt(trip.SpeedScale * 100f);
+        string stopped = percent == 0 ? T("  (stopped)", "  (zaustavljeno)") : "";
+        GUI.Label(new Rect(x, y, iw, rowTitle), T("Walking speed (you and the mouse): ", "Brzina hoda (ti i miš): ") + percent + "%" + stopped, hudTitleStyle);
+        y += rowTitle + 6f;
+
+        // the gauge: a track, a filled part and a handle you can drag
+        Event e = Event.current;
+        int id = GUIUtility.GetControlID(FocusType.Passive);
+        var hit = new Rect(x - 14f, y, iw + 28f, 30f);
+        switch (e.GetTypeForControl(id))
+        {
+            case EventType.MouseDown:
+                if (e.button == 0 && hit.Contains(e.mousePosition))
+                {
+                    GUIUtility.hotControl = id;
+                    trip.SpeedScale = Mathf.Lerp(trip.MinSpeedScale, trip.MaxSpeedScale, Mathf.InverseLerp(x, x + iw, e.mousePosition.x));
+                    e.Use();
+                }
+                break;
+            case EventType.MouseDrag:
+                if (GUIUtility.hotControl == id)
+                {
+                    trip.SpeedScale = Mathf.Lerp(trip.MinSpeedScale, trip.MaxSpeedScale, Mathf.InverseLerp(x, x + iw, e.mousePosition.x));
+                    e.Use();
+                }
+                break;
+            case EventType.MouseUp:
+                if (GUIUtility.hotControl == id) { GUIUtility.hotControl = 0; e.Use(); }
+                break;
+        }
+
+        float t = Mathf.InverseLerp(trip.MinSpeedScale, trip.MaxSpeedScale, trip.SpeedScale);
+        float fillW = Mathf.Max(10f, iw * t);
+        GUI.Box(new Rect(x, y + 10f, iw, 10f), GUIContent.none, sliderTrackStyle);
+        GUI.Box(new Rect(x, y + 10f, fillW, 10f), GUIContent.none, sliderFillStyle);
+        GUI.Box(new Rect(x + iw * t - 14f, y + 1f, 28f, 28f), GUIContent.none, sliderThumbStyle);
+        y += 30f + 8f;
+
+        GUI.Label(new Rect(x, y, iw, rowHint),
+                  T("Arrow keys: look around  |  R / F: zoom in / out  |  - / +: speed  |  W A S D: take control",
+                    "Strelice: gledaj okolo  |  R / F: zumiraj / odzumiraj  |  - / +: brzina  |  W A S D: preuzmi kontrolu"),
+                  hudHintStyle);
+
+        GUI.matrix = Matrix4x4.identity;
     }
 
     // A line at the top of the screen while the NPC is leading the way, and for a moment after arriving
@@ -1091,14 +1291,32 @@ public class NPCDialogue : MonoBehaviour
         }
         else if (offering)
         {
-            bool facts = offerKind == OfferKind.Facts;
             float half = (inner - 12f) / 2f;
+            string yesLabel, noLabel;
+            GUIStyle yesStyle = yesButtonStyle, noStyle = buttonStyle;
+            if (offerKind == OfferKind.Mode)
+            {
+                yesLabel = T("I'll walk myself   [1]", "Hodat ću sam   [1]");
+                noLabel = T("Auto-follow the mouse   [2]", "Automatski prati miša   [2]");
+                yesStyle = buttonStyle;
+                noStyle = accentButtonStyle;
+            }
+            else if (offerKind == OfferKind.Facts)
+            {
+                yesLabel = T("Yes, tell me   [1]", "Da, ispričaj   [1]");
+                noLabel = T("No, thanks   [2]", "Ne, hvala   [2]");
+            }
+            else
+            {
+                yesLabel = T("Yes, lead the way   [1]", "Da, vodi me   [1]");
+                noLabel = T("No, thanks   [2]", "Ne, hvala   [2]");
+            }
+
             GUILayout.BeginHorizontal();
-            string yesLabel = facts ? T("Yes, tell me   [1]", "Da, ispričaj   [1]") : T("Yes, lead the way   [1]", "Da, vodi me   [1]");
-            if (GUILayout.Button(yesLabel, yesButtonStyle, GUILayout.Width(half), GUILayout.Height(58f)))
+            if (GUILayout.Button(yesLabel, yesStyle, GUILayout.Width(half), GUILayout.Height(58f)))
                 pendingOfferChoice = 0;
             GUILayout.Space(12f);
-            if (GUILayout.Button(T("No, thanks   [2]", "Ne, hvala   [2]"), buttonStyle, GUILayout.Width(half), GUILayout.Height(58f)))
+            if (GUILayout.Button(noLabel, noStyle, GUILayout.Width(half), GUILayout.Height(58f)))
                 pendingOfferChoice = 1;
             GUILayout.EndHorizontal();
         }
@@ -1336,6 +1554,24 @@ public class NPCDialogue : MonoBehaviour
         yesButtonStyle = MakeButton(new Color(0.17f, 0.55f, 0.36f, 1f), new Color(0.22f, 0.65f, 0.43f, 1f), new Color(0.12f, 0.43f, 0.28f, 1f), 22, FontStyle.Bold);
         choiceButtonStyle = MakeButton(neutral, new Color(0.28f, 0.32f, 0.43f, 1f), new Color(0.15f, 0.17f, 0.24f, 1f), 22, FontStyle.Normal, TextAnchor.MiddleLeft);
         bigButtonStyle = MakeButton(new Color(0.20f, 0.44f, 0.86f, 1f), new Color(0.27f, 0.52f, 0.95f, 1f), new Color(0.15f, 0.34f, 0.70f, 1f), 27, FontStyle.Bold);
+
+        // speed gauge
+        Texture2D trackTex = MakeRounded(new Color(1f, 1f, 1f, 0.18f), Color.clear, 5, 0f);
+        Texture2D fillTex = MakeRounded(new Color(0.27f, 0.52f, 0.95f, 1f), Color.clear, 5, 0f);
+        Texture2D thumbTex = MakeRounded(Color.white, new Color(0.27f, 0.52f, 0.95f, 1f), 12, 3.5f);
+        sliderTrackStyle = new GUIStyle(GUI.skin.box) { border = new RectOffset(6, 6, 6, 6), margin = new RectOffset(0, 0, 0, 0), padding = new RectOffset(0, 0, 0, 0) };
+        sliderTrackStyle.normal.background = trackTex;
+        sliderFillStyle = new GUIStyle(sliderTrackStyle);
+        sliderFillStyle.normal.background = fillTex;
+        sliderThumbStyle = new GUIStyle(sliderTrackStyle) { border = new RectOffset(13, 13, 13, 13) };
+        sliderThumbStyle.normal.background = thumbTex;
+
+        hudTitleStyle = new GUIStyle(GUI.skin.label) { fontSize = 24, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
+        hudTitleStyle.normal.textColor = Color.white;
+        SetFont(hudTitleStyle);
+        hudHintStyle = new GUIStyle(GUI.skin.label) { fontSize = 17, wordWrap = true, alignment = TextAnchor.UpperCenter };
+        hudHintStyle.normal.textColor = new Color(1f, 1f, 1f, 0.72f);
+        SetFont(hudHintStyle);
 
         // slim scrollbar
         scrollbarStyle = new GUIStyle(chatSkin.verticalScrollbar) { fixedWidth = 8f, margin = new RectOffset(6, 0, 2, 2) };
