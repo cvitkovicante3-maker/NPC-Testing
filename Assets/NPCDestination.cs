@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEngine;
 
 /// <summary>
@@ -16,6 +18,11 @@ public class NPCDestination : MonoBehaviour
     [SerializeField] private string nameEnglish = "St. James Church";
     [SerializeField] private string nameCroatian = "Crkva sv. Jakova";
 
+    [Header("What the mouse knows about this place (optional)")]
+    [Tooltip("A few facts about this place, used when the mouse tells the player about it on arrival. Works even if the knowledge files have no entry for it.")]
+    [TextArea(2, 6)][SerializeField] private string descriptionEnglish = "";
+    [TextArea(2, 6)][SerializeField] private string descriptionCroatian = "";
+
     [Header("Words the player may use for this place")]
     [Tooltip("English and Croatian words, no need for accents. Short words (4 letters or less) must match a whole word, longer ones also match inside words. Add the endings people use: crkva, crkvu, crkve.")]
     [SerializeField] private string[] keywords = { "church", "parish", "st james", "saint james", "crkva", "crkvu", "crkve", "sveti jakov", "sv jakov" };
@@ -27,6 +34,7 @@ public class NPCDestination : MonoBehaviour
     public float ArriveDistance => arriveDistance;
 
     private string[] normalizedKeys;
+    private string normalizedNames = "";
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStatics()
@@ -45,6 +53,13 @@ public class NPCDestination : MonoBehaviour
         All.Remove(this);
     }
 
+    /// <summary>The facts typed in for this place, in the given language (falls back to English; "" if none).</summary>
+    public string DescriptionFor(DialogueLanguage language)
+    {
+        string d = (language == DialogueLanguage.Croatian && !string.IsNullOrWhiteSpace(descriptionCroatian)) ? descriptionCroatian : descriptionEnglish;
+        return string.IsNullOrWhiteSpace(d) ? "" : d.Trim();
+    }
+
     public string NameFor(DialogueLanguage language)
     {
         return (language == DialogueLanguage.Croatian && !string.IsNullOrWhiteSpace(nameCroatian)) ? nameCroatian : nameEnglish;
@@ -57,6 +72,7 @@ public class NPCDestination : MonoBehaviour
         AddKey(keys, nameCroatian);
         if (keywords != null) foreach (string k in keywords) AddKey(keys, k);
         normalizedKeys = keys.ToArray();
+        normalizedNames = " " + NPCKnowledge.Normalize(nameEnglish) + " | " + NPCKnowledge.Normalize(nameCroatian) + " ";
     }
 
     private static void AddKey(List<string> keys, string raw)
@@ -71,7 +87,14 @@ public class NPCDestination : MonoBehaviour
 
         int score = 0;
         foreach (string key in normalizedKeys)
-            if (Has(paddedMessage, key)) score += key.Split(' ').Length;   // multi-word keys count more
+        {
+            if (!Has(paddedMessage, key)) continue;
+            score += key.Split(' ').Length;                 // multi-word keys count more
+
+            // A word that is part of the place's own NAME counts much more than a loose keyword. So "church"
+            // finds St. James Church even if another place still has "church" left over in its keywords.
+            if (normalizedNames.Contains(key)) score += 2;
+        }
         return score;
     }
 
@@ -169,6 +192,106 @@ public class NPCDestination : MonoBehaviour
             if (d == null) continue;
             int score = d.Score(padded);
             if (score > bestScore) { best = d; bestScore = score; }
+        }
+        return best;
+    }
+
+    // ------------------------------------------------------------- which place does the player MEAN?
+
+    // Splits a message into clauses: sentences, commas, and words like "but" / "and" / "ali" / "pa"
+    private static readonly Regex ClauseSplit =
+        new Regex(@"[.!?;,\n\r]+|\s(?:but|and|ali|pa|then)\s", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// The place(s) the player wants to GO TO or asks about, not every place they happen to mention.
+    /// "I had a good stay in the hotel. Can you take me to the Church?" gives the church only: only the part
+    /// of the message that asks for directions is searched, "from the hotel to the church" looks at what
+    /// comes after "to", and if several places are still left the one mentioned first wins
+    /// ("the church near the hotel"). Asking for a kind of place ("a hotel") still gives all of them.
+    /// </summary>
+    public static List<NPCDestination> FindTargets(string message)
+    {
+        string target = TargetText(message);
+        string used = target;
+        List<NPCDestination> list = FindAllInMessage(target);
+
+        if (list.Count == 0 && target != NPCKnowledge.Normalize(message))
+        {
+            used = message;
+            list = FindAllInMessage(message);   // the asking part named no place ("take me there"): use the whole message
+        }
+
+        if (list.Count > 1) KeepFirstMentioned(list, used);
+        return list;
+    }
+
+    // Only the clauses that ask for directions, and (for "from X to Y") only what follows "to"
+    private static string TargetText(string message)
+    {
+        var sb = new StringBuilder();
+        foreach (string clause in ClauseSplit.Split(message))
+        {
+            if (string.IsNullOrWhiteSpace(clause)) continue;
+            if (LooksLikeDirectionsRequest(clause) || LooksLikeDirectCommand(clause) || LooksLikeExistenceQuestion(clause))
+                sb.Append(clause).Append(" . ");
+        }
+
+        string text = " " + NPCKnowledge.Normalize(sb.Length > 0 ? sb.ToString() : message) + " ";
+
+        int from = IndexOfAny(text, " from ", " iz ", " od ");
+        if (from >= 0)
+        {
+            int to = Math.Max(Math.Max(text.LastIndexOf(" to ", StringComparison.Ordinal),
+                                       text.LastIndexOf(" do ", StringComparison.Ordinal)),
+                              text.LastIndexOf(" prema ", StringComparison.Ordinal));
+            if (to > from)
+            {
+                int cut = text.IndexOf(' ', to + 1);
+                if (cut > 0) text = text.Substring(cut);
+            }
+        }
+        return text.Trim();
+    }
+
+    private static int IndexOfAny(string text, params string[] needles)
+    {
+        int best = -1;
+        foreach (string n in needles)
+        {
+            int i = text.IndexOf(n, StringComparison.Ordinal);
+            if (i >= 0 && (best < 0 || i < best)) best = i;
+        }
+        return best;
+    }
+
+    // Of several candidates, keep the ones named first in the text
+    private static void KeepFirstMentioned(List<NPCDestination> list, string text)
+    {
+        string padded = " " + NPCKnowledge.Normalize(text) + " ";
+        var positions = new int[list.Count];
+        int anchor = int.MaxValue;
+        for (int i = 0; i < list.Count; i++)
+        {
+            positions[i] = list[i].FirstMention(padded);
+            if (positions[i] < anchor) anchor = positions[i];
+        }
+
+        var kept = new List<NPCDestination>();
+        for (int i = 0; i < list.Count; i++)
+            if (positions[i] <= anchor + 2) kept.Add(list[i]);   // same word, give or take an ending
+        list.Clear();
+        list.AddRange(kept);
+    }
+
+    private int FirstMention(string padded)
+    {
+        if (normalizedKeys == null) Prepare();
+        int best = int.MaxValue;
+        foreach (string key in normalizedKeys)
+        {
+            if (!Has(padded, key)) continue;
+            int i = padded.IndexOf(key, StringComparison.Ordinal);
+            if (i >= 0 && i < best) best = i;
         }
         return best;
     }

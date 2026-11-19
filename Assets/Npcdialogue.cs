@@ -133,6 +133,7 @@ public class NPCDialogue : MonoBehaviour
     private int pendingOfferChoice = -1;        // 0 = yes, 1 = no (set by buttons / keys)
     private enum OfferKind { Guide, Facts, Mode }
     private OfferKind offerKind = OfferKind.Guide;   // what the Yes / No buttons are about
+    private NPCDestination topicPlace;          // the place the conversation is currently about
     private string factsTopic;                  // set while asking for facts about a place (used to look them up)
     private List<NPCDestination> pendingChoices;     // several places match: waiting for the NPC's reply
     private List<NPCDestination> choices;            // the list the player picks from
@@ -452,11 +453,26 @@ public class NPCDialogue : MonoBehaviour
         if (sendBriefing) query += BuildBriefing() + "\n\n";
         if (knowledge != null)
         {
-            string notes = knowledge.BuildContextFor(visible ? text : (factsTopic ?? ""), language, sendBriefing);
+            // facts about a place never fall back on what was used for the previous place
+            string notes = knowledge.BuildContextFor(visible ? text : (factsTopic ?? ""), language, sendBriefing, allowFollowUpReuse: visible);
             if (notes.Length > 0) query += notes + "\n\n";
         }
         factsTopic = null;
-        if (visible) query += NavigationNote(text);
+
+        // The conversation follows the player's CURRENT topic. If they bring up something new, the old topic
+        // is dropped from the model's memory so it can't keep talking about it.
+        bool topicChanged = knowledge != null && knowledge.TopicChanged;
+        if (visible)
+        {
+            query += PlaceNotesFor(text, ref topicChanged);
+            query += NavigationNote(text);
+        }
+        if (topicChanged)
+        {
+            ForgetOldTopic();
+            query += T("[The player has changed the subject. Answer about the new subject only and do not go back to the earlier one.]",
+                       "[Igrač je promijenio temu. Odgovori samo o novoj temi i ne vraćaj se na prethodnu.]") + "\n\n";
+        }
         sendBriefing = false;
         query += text + "\n\n" + LanguageReminder();
 
@@ -470,7 +486,7 @@ public class NPCDialogue : MonoBehaviour
     // like "a hotel"), or, for "there" / "tamo" / "again", the one asked about before.
     private List<NPCDestination> PlacesFor(string text)
     {
-        List<NPCDestination> list = NPCDestination.FindAllInMessage(text);
+        List<NPCDestination> list = NPCDestination.FindTargets(text);
         if (list.Count == 0 && lastPlace != null && NPCDestination.RefersToPreviousPlace(text)) list.Add(lastPlace);
         return list;
     }
@@ -520,6 +536,8 @@ public class NPCDialogue : MonoBehaviour
             }
             choices = places;
             choosing = true;
+            Debug.Log("NPCDialogue: several places match \"" + text + "\": " + string.Join(", ", places.ConvertAll(p => p.name)) +
+                      ". If one of them should not be in this list, check its Keywords (select it in the Hierarchy).", this);
             AddLine(false, T("I know several places like that: " + names + ". Which one would you like to visit?",
                              "Znam nekoliko takvih mjesta: " + names + ". Koje želiš posjetiti?"));
             return true;
@@ -681,8 +699,21 @@ public class NPCDialogue : MonoBehaviour
         string name = place.NameFor(language);
         AddLine(true, T("Yes, please.", "Da, molim."));
         factsTopic = place.FactsQuery();   // makes the matching knowledge entries available to the model
-        Say(T("(The player is standing at " + name + " and wants to hear facts about it. Using the notes you were given, tell them two or three interesting facts in a friendly way, in at most four short sentences.)",
-              "(Igrač stoji kod mjesta: " + name + " i želi čuti činjenice o njemu. Koristeći dane bilješke, prijateljski mu ispričaj dvije do tri zanimljive činjenice, u najviše četiri kratke rečenice.)"),
+        lastPlace = place;
+        topicPlace = place;
+        ForgetOldTopic();                  // a new place is a new topic: forget what was said about the last one
+
+        string description = place.DescriptionFor(language);
+        Say(T("(The player has just arrived at " + name + " and wants to hear facts about it. Talk ONLY about " + name +
+              "; ignore any other place that came up earlier in this conversation. " +
+              (description.Length > 0 ? "Facts you know about it: " + description + " " : "") +
+              "Using these and the notes you were given, tell them two or three interesting facts in a friendly way, in at most four short sentences. " +
+              "If you know little about it, say so honestly instead of describing another place.)",
+              "(Igrač je upravo stigao do mjesta: " + name + " i želi čuti činjenice o njemu. Govori ISKLJUČIVO o mjestu: " + name +
+              "; zanemari svako drugo mjesto koje se ranije spominjalo u razgovoru. " +
+              (description.Length > 0 ? "Činjenice koje znaš o njemu: " + description + " " : "") +
+              "Koristeći njih i dane bilješke, prijateljski mu ispričaj dvije do tri zanimljive činjenice, u najviše četiri kratke rečenice. " +
+              "Ako o njemu znaš malo, to iskreno reci umjesto da opisuješ neko drugo mjesto.)"),
             visible: false);
     }
 
@@ -742,8 +773,8 @@ public class NPCDialogue : MonoBehaviour
     private string LanguageReminder()
     {
         return language == DialogueLanguage.Croatian
-            ? "(Odgovori samo na hrvatskom jeziku. Ne piši engleski i ne prevodi.)"
-            : "(Reply only in English. Do not add a translation.)";
+            ? "(Odgovori samo na hrvatskom jeziku. Ne piši engleski i ne prevodi. Odgovori na moju posljednju poruku i ostani na temi o kojoj sada razgovaramo.)"
+            : "(Reply only in English. Do not add a translation. Answer my latest message and stay on the topic we are discussing now.)";
     }
 
     // Used for a second attempt when the model answered in the wrong language
@@ -881,6 +912,42 @@ public class NPCDialogue : MonoBehaviour
         catch (Exception) { }
     }
 
+    // If the message names a place that has a description, hand the description to the model. Also notices when
+    // the place being talked about changes.
+    private string PlaceNotesFor(string text, ref bool topicChanged)
+    {
+        List<NPCDestination> places = NPCDestination.FindAllInMessage(text);
+        if (places.Count == 0 || places.Count > 2) return "";
+
+        if (topicPlace != null && places[0] != topicPlace) topicChanged = true;
+        topicPlace = places[0];
+
+        var sb = new System.Text.StringBuilder();
+        foreach (NPCDestination p in places)
+        {
+            string d = p.DescriptionFor(language);
+            if (d.Length > 0) sb.Append("\n- ").Append(p.NameFor(language)).Append(": ").Append(d);
+        }
+        if (sb.Length == 0) return "";
+        return (language == DialogueLanguage.Croatian ? "[Bilješke o mjestu (ne čitaj ih naglas):" : "[Notes about the place (don't read them out):")
+               + sb + "]\n\n";
+    }
+
+    // Forgets the conversation so far (keeps the character description in the first exchange), so the model
+    // starts the new topic with a clean slate instead of drifting back to the old one.
+    private void ForgetOldTopic()
+    {
+        if (agent == null) return;
+        try
+        {
+            var chat = agent.chat;
+            if (chat == null || chat.Count == 0) return;
+            int head = (chat[0] != null && chat[0].role == "system" ? 1 : 0) + 2;
+            if (chat.Count > head) chat.RemoveRange(head, chat.Count - head);
+        }
+        catch (Exception) { }
+    }
+
     // Removes the last player message and the last reply from the model's memory
     private void DropLastExchange()
     {
@@ -928,6 +995,7 @@ public class NPCDialogue : MonoBehaviour
                        : "") +
                    "\n\nPravila: razgovaraj s igračem. Odgovaraj kratko (jedna do tri rečenice) i prirodno, kao u govoru. " +
                    "Bez opisa radnji, bez zvjezdica, bez emotikona. " +
+                   "Uvijek odgovaraj na igračevu posljednju poruku i prati temu o kojoj igrač trenutno govori; kad igrač promijeni temu, promijeni je i ti i ne vraćaj se na prethodnu osim ako to zatraži. " +
                    "Govoriš ISKLJUČIVO hrvatski (standardni hrvatski jezik). Nikada ne odgovaraj na engleskom i nikada ne prevodi svoj odgovor na engleski." +
                    (tagAlong ? "\nKad razgovor završi, rado pratiš igrača kao suputnik." : "");
         }
@@ -941,6 +1009,7 @@ public class NPCDialogue : MonoBehaviour
                    : "") +
                "\n\nRules: talk with the player. Keep replies short (one to three sentences) and natural, like speech. " +
                "No stage directions, no asterisks, no emojis. " +
+               "Always answer the player's latest message and follow the topic they are discussing right now; when they change the subject, change with them and do not go back to the earlier one unless they ask. " +
                "You speak only English. Never answer in Croatian and never add a translation." +
                (tagAlong ? "\nWhen the conversation ends, you happily tag along beside the player as a travelling companion." : "");
     }

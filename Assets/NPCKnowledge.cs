@@ -130,12 +130,33 @@ public class NPCKnowledge : MonoBehaviour
     /// The notes to put in front of a player message ("" if there are none): the entries matching
     /// the message, plus the "always" entries when includeCore is true.
     /// </summary>
-    public string BuildContextFor(string playerMessage, DialogueLanguage language, bool includeCore)
+    // Short messages with one of these words continue the current topic ("tell me more", "why is that?", "a koliko košta?")
+    private static readonly string[] FollowUpWords =
+    {
+        "more", "else", "another", "why", "how", "that", "this", "it", "its", "there", "them", "they", "also",
+        "continue", "go on", "explain", "detail", "details", "tell me", "and then", "what about",
+        "jos", "zasto", "kako", "taj", "ta", "to", "te", "ono", "tamo", "njega", "nje", "dalje", "nastavi",
+        "objasni", "detalje", "recite", "reci mi", "a sto"
+    };
+
+    /// <summary>True if the last BuildContextFor found a NEW topic (different entries from the previous message).</summary>
+    public bool TopicChanged { get; private set; }
+
+    private static bool LooksLikeFollowUp(string paddedMessage)
+    {
+        foreach (string word in FollowUpWords)
+            if (Matches(paddedMessage, Normalize(word))) return true;
+        return false;
+    }
+
+    public string BuildContextFor(string playerMessage, DialogueLanguage language, bool includeCore, bool allowFollowUpReuse = true)
     {
         List<Item> items = ItemsFor(language);
         if (items.Count == 0) return "";
 
         var chosen = new List<Item>();
+        bool reused = false;
+        TopicChanged = false;
 
         if (!string.IsNullOrWhiteSpace(playerMessage))
         {
@@ -163,15 +184,26 @@ public class NPCKnowledge : MonoBehaviour
             for (int i = 0; i < scored.Count && chosen.Count < maxFactsPerMessage; i++)
                 chosen.Add(scored[i].Key);
 
-            // "tell me more" and similar short follow-ups: reuse what we used last time
-            if (chosen.Count == 0 && reusePreviousForFollowUps && lastUsedIds.Count > 0 && WordCount(message) <= 6)
+            // "tell me more" and similar short follow-ups: reuse what we used last time.
+            // A short message that is NOT a follow-up ("what's the weather like?") starts a new topic instead.
+            if (chosen.Count == 0 && allowFollowUpReuse && reusePreviousForFollowUps && lastUsedIds.Count > 0
+                && WordCount(message) <= 6 && LooksLikeFollowUp(padded))
             {
                 foreach (Item item in items)
                     if (lastUsedIds.Contains(item.entry.id)) chosen.Add(item);
+                reused = true;
             }
 
             if (chosen.Count > 0)
             {
+                // different entries than last time = the player changed the subject
+                if (!reused && lastUsedIds.Count > 0)
+                {
+                    bool overlap = false;
+                    foreach (Item item in chosen) if (lastUsedIds.Contains(item.entry.id)) overlap = true;
+                    TopicChanged = !overlap;
+                }
+
                 lastUsedIds.Clear();
                 foreach (Item item in chosen) lastUsedIds.Add(item.entry.id);
             }
