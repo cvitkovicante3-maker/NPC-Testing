@@ -419,7 +419,7 @@ public class NPCDialogue : MonoBehaviour
 
     private void SendPlayerMessage()
     {
-        string text = inputText.Trim();
+        string text = inputText.Replace('\r', ' ').Replace('\n', ' ').Trim();
         if (text.Length == 0 || waiting || selectingLanguage || offering || choosing) return;
         inputText = "";
         focusRequested = true;
@@ -1393,6 +1393,7 @@ public class NPCDialogue : MonoBehaviour
         {
             bool enter = e.type == EventType.KeyDown
                          && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
+                         && !e.shift   // Shift+Enter starts a new line, Enter sends
                          && GUI.GetNameOfFocusedControl() == "ChatInput";
             if (enter) { pendingSend = true; e.Use(); }
 
@@ -1400,22 +1401,31 @@ public class NPCDialogue : MonoBehaviour
             if (Time.unscaledTime < openedTime + 0.2f) inputText = "";
 
             float sendWidth = 130f * tz;
-            float fieldWidth = inner - sendWidth - 10f;   // FIXED width: long text scrolls inside the box, buttons stay put
+            float fieldWidth = inner - sendWidth - 10f;   // FIXED width; only the HEIGHT grows with the text
+
+            // The box grows as the message gets longer, so the whole message stays visible while typing,
+            // and shrinks back to one line as soon as it is sent.
+            float oneLine = 52f * tz;
+            float maxHeight = 190f * tz;
+            float fieldHeight = Mathf.Clamp(inputStyle.CalcHeight(new GUIContent(inputText + " "), fieldWidth), oneLine, maxHeight);
 
             GUILayout.BeginHorizontal();
             GUI.SetNextControlName("ChatInput");
-            inputText = GUILayout.TextField(inputText, 300, inputStyle, GUILayout.Width(fieldWidth), GUILayout.Height(52f * tz));
+            inputText = GUILayout.TextArea(inputText, 400, inputStyle, GUILayout.Width(fieldWidth), GUILayout.Height(fieldHeight));
 
             if (e.type == EventType.Repaint && inputText.Length == 0)
             {
                 Rect fr = GUILayoutUtility.GetLastRect();
-                GUI.Label(new Rect(fr.x + 20f, fr.y, fr.width - 28f, fr.height),
+                GUI.Label(new Rect(fr.x + 20f, fr.y, fr.width - 28f, oneLine),
                           T("Type a message and press Enter...", "Napiši poruku i pritisni Enter..."), hintStyle);
             }
 
             GUILayout.Space(10f);
-            if (GUILayout.Button(T("Send", "Pošalji"), accentButtonStyle, GUILayout.Width(sendWidth), GUILayout.Height(52f * tz)))
+            GUILayout.BeginVertical(GUILayout.Width(sendWidth), GUILayout.Height(fieldHeight));
+            GUILayout.FlexibleSpace();   // the Send button stays level with the bottom line of the box
+            if (GUILayout.Button(T("Send", "Pošalji"), accentButtonStyle, GUILayout.Width(sendWidth), GUILayout.Height(oneLine)))
                 pendingSend = true;
+            GUILayout.EndVertical();
             GUILayout.EndHorizontal();
         }
         GUILayout.EndArea();
@@ -1595,9 +1605,9 @@ public class NPCDialogue : MonoBehaviour
         {
             fontSize = 23,
             alignment = TextAnchor.MiddleLeft,
-            wordWrap = false,
+            wordWrap = true,
             clipping = TextClipping.Clip,
-            padding = new RectOffset(18, 18, 8, 8),
+            padding = new RectOffset(18, 18, 12, 12),
             margin = new RectOffset(4, 4, 4, 4)
         };
         Texture2D fieldTex = MakeRounded(new Color(0.11f, 0.13f, 0.19f, 1f), new Color(1f, 1f, 1f, 0.14f), 12, 1.5f);
