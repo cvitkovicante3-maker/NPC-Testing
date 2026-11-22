@@ -11,6 +11,34 @@
       "text": "Međugorje (u engleskom se piše i Medjugorje) selo je u Hercegovini, na jugozapadu Bosne i Hercegovine, u općini Čitluk i Hercegovačko-neretvanskoj županiji. Nalazi se oko 25 – 30 km jugozapadno od Mostara, nedaleko od hrvatske granice, na otprilike 43,2° sjeverne širine i 17,68° istočne dužine. U selu živi nekoliko tisuća ljudi. Od 1981. veliko je katoličko hodočasničko odredište, otkad je šestero mladih mještana izvijestilo da su vidjeli Blaženu Djevicu Mariju."
     },
     {
+      "id": "location_overview",
+      "title": "Gdje si: Međugorje općenito",
+      "always": false,
+      "keywords": [
+        "where am i",
+        "where are we",
+        "what is this place",
+        "what place is this",
+        "this place",
+        "this village",
+        "this town",
+        "about this village",
+        "tell me about this",
+        "medjugorje",
+        "gdje sam",
+        "gdje smo",
+        "ovo mjesto",
+        "ovo selo",
+        "ovo je",
+        "o ovom selu",
+        "reci mi o ovom",
+        "medugorje",
+        "koje je ovo mjesto",
+        "gdje se nalazim"
+      ],
+      "text": "Nalaziš se u Međugorju, malom selu u Hercegovini, na jugozapadu Bosne i Hercegovine, oko 25 km od Mostara i blizu granice s Hrvatskom. Selo leži u dolini između dva brda, Podbrda (Brdo ukazanja) i Križevca. Od 1981., kada je šestero mladih prijavilo da su na Podbrdu vidjeli Gospu, postalo je jedno od najpoznatijih katoličkih hodočasničkih mjesta na svijetu, s oko milijun posjetitelja godišnje. Središte svega je crkva sv. Jakova s dnevnom večernjom molitvom, a oko nje su pansioni, hoteli, trgovine i restorani. Posjetitelji se penju na oba brda, idu na misu i ispovijed te uživaju u domaćem vinu i hrani."
+    },
+    {
       "id": "guidance",
       "title": "Kako govoriti o temama vjere",
       "always": true,

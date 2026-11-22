@@ -43,6 +43,26 @@ public class PlayerAutoFollow : MonoBehaviour
     /// <summary>True while the character is auto-following.</summary>
     public bool IsActive { get; private set; }
 
+    /// <summary>True while the player is chatting with the mouse (the trip is on hold: no keys are read, nobody moves).</summary>
+    public bool Suspended { get; private set; }
+
+    /// <summary>Puts the trip on hold while the chat is open, and takes it up again afterwards.</summary>
+    public void SetSuspended(bool value)
+    {
+        if (!IsActive || Suspended == value) return;
+        Suspended = value;
+        if (value)
+        {
+            if (player != null) player.StopAutopilot();
+        }
+        else
+        {
+            trail.Clear();
+            if (mouse != null) lastCrumb = mouse.transform.position;
+            armedTime = Time.time + 0.5f;
+        }
+    }
+
     /// <summary>Overall speed: 1 = normal. Applies to the mouse and the character together.</summary>
     public float SpeedScale
     {
@@ -89,6 +109,7 @@ public class PlayerAutoFollow : MonoBehaviour
     {
         if (!IsActive) return;
         IsActive = false;
+        Suspended = false;
 
         if (player != null) player.StopAutopilot();
         if (mouse != null) mouse.GuideSpeedScale = 1f;
@@ -106,6 +127,8 @@ public class PlayerAutoFollow : MonoBehaviour
 
         // Over: the guide arrived, gave up, or something was removed
         if (player == null || mouse == null || !mouse.IsGuiding) { End(); return; }
+
+        if (Suspended) return;   // chatting with the mouse
 
         // The player grabs the controls
         if (Time.time >= armedTime && player.HasManualInput) { End(); return; }

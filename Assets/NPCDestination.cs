@@ -296,6 +296,67 @@ public class NPCDestination : MonoBehaviour
         return best;
     }
 
+    // "Where am I?", "gdje sam?": about the player's own position, not a request to go somewhere
+    private static readonly string[] SelfLocationWords =
+    {
+        "where am i", "where are we", "where exactly am i", "where is this", "what is this place", "what place is this",
+        "what is this area", "which place is this", "where am i right now", "do you know where i am",
+        "gdje sam", "gdje smo", "gdje se nalazim", "gdje se nalazimo", "koje je ovo mjesto", "sto je ovo za mjesto",
+        "koje je ovo podrucje", "u kojem sam mjestu", "znas li gdje sam"
+    };
+
+    public static bool LooksLikeSelfLocation(string message)
+    {
+        string padded = " " + NPCKnowledge.Normalize(message) + " ";
+        foreach (string word in SelfLocationWords)
+            if (padded.Contains(" " + NPCKnowledge.Normalize(word) + " ")) return true;
+        return false;
+    }
+
+
+    // Broad wishes that are about places even without naming one: "I'm tired", "where can I eat", "show me something"
+    private static readonly string[] PlaceSeekingWords =
+    {
+        "where", "take me", "bring me", "show me", "lead me", "guide", "go to", "walk to", "visit", "see", "find", "near", "nearby", "close",
+        "sleep", "stay", "room", "eat", "food", "hungry", "drink", "pray", "church", "hotel", "directions", "way to", "how do i get",
+        "gdje", "odvedi", "vodi", "povedi", "pokazi", "pokaz", "ici", "idem", "posjeti", "vidjeti", "naci", "nadi", "blizu", "blizini",
+        "spavati", "prenociti", "soba", "jesti", "gladan", "gladna", "piti", "moliti", "crkva", "hotel", "put do", "kako do", "kako doci"
+    };
+
+    /// <summary>True if the message is probably about going somewhere or finding a kind of place.</summary>
+    public static bool LooksLikePlaceSeeking(string message)
+    {
+        string padded = " " + NPCKnowledge.Normalize(message) + " ";
+        foreach (string word in PlaceSeekingWords)
+        {
+            string w = NPCKnowledge.Normalize(word);
+            if (w.Length <= 4 ? padded.Contains(" " + w + " ") : padded.Contains(" " + w)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The place(s) a NAME refers to (as written by the language model in a tag): an exact name gives one place,
+    /// anything looser ("hotel") gives every place that fits equally well.
+    /// </summary>
+    public static List<NPCDestination> ResolveName(string name)
+    {
+        var result = new List<NPCDestination>();
+        string n = NPCKnowledge.Normalize(name);
+        if (n.Length == 0) return result;
+
+        foreach (NPCDestination d in All)
+        {
+            if (d == null) continue;
+            if (n == NPCKnowledge.Normalize(d.nameEnglish) || n == NPCKnowledge.Normalize(d.nameCroatian))
+            {
+                result.Add(d);
+                return result;
+            }
+        }
+        return FindAllInMessage(name);
+    }
+
     /// <summary>
     /// Every destination the message talks about equally well. "a hotel" returns all hotels;
     /// "Hotel Santa Maria" returns just that one. Empty if nothing matches.

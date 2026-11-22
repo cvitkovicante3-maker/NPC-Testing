@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -140,6 +141,8 @@ public class NPCDialogue : MonoBehaviour
     private bool choosing;                      // showing the numbered list of places
     private int pendingChoicePick = -1;         // index picked, or -2 for "none"
     private NPCDestination guidingTo;           // where the NPC is leading the player
+    private int messageIndex, lastPlaceMessage;   // "there" / "again" only refers to a place from the last few messages
+    private string lastVisibleText;                 // the player's latest typed message (used to check the model's place tag)
     private NPCDestination lastPlace;           // the last place the player asked about ("take me there")
     private float startGuideAt = -1f;           // a direct "take me there" order: the guide starts at this time
     private string arrivedName = "";
@@ -331,12 +334,18 @@ public class NPCDialogue : MonoBehaviour
         if (playerMovement != null) playerMovement.enabled = false;
         if (follower != null) { followerWasEnabled = follower.enabled; follower.enabled = false; }
         if (companion != null) companion.SetPaused(true);
+        if (trip != null && trip.IsActive) trip.SetSuspended(true);   // talking while the character auto-follows: pause the trip
 
         // First ask which language to talk in (unless it was chosen before and we should remember it)
         if (askLanguageEveryTime || !languageChosen)
             selectingLanguage = true;
         else
+        {
+            if (guidingTo != null)
+                AddLine(false, T("We're on our way to " + guidingTo.NameFor(language) + ". Ask me anything, or tell me if you'd rather go somewhere else.",
+                                 "Na putu smo do: " + guidingTo.NameFor(language) + ". Pitaj me što želiš ili reci ako radije želiš ići drugamo."));
             StartConversation();
+        }
     }
 
     private void EndTalking()
@@ -356,7 +365,9 @@ public class NPCDialogue : MonoBehaviour
         if (companion != null)
         {
             companion.SetPaused(false);
-            if (followAfterConversation && !stayPut && player != null) companion.StartFollowing(player);
+            // If we were interrupted on the way somewhere, the trip simply carries on
+            if (trip != null && trip.IsActive && companion.IsGuiding) trip.SetSuspended(false);
+            if (followAfterConversation && !stayPut && player != null && !companion.IsGuiding) companion.StartFollowing(player);
         }
     }
 
@@ -436,12 +447,10 @@ public class NPCDialogue : MonoBehaviour
             return;
         }
 
-        // Where-is questions and "take me to..." orders about known places are answered instantly (no model, no waiting).
-        if (visible && TryInstantNavigation(text)) return;
-
         lastPlayerLine = null;
         lastPlayerText = visible ? text : null;
-        if (visible) lastPlayerLine = AddLine(true, text);
+        lastVisibleText = visible ? text : null;
+        if (visible) { lastPlayerLine = AddLine(true, text); messageIndex++; }
 
         waiting = true;
         status = "";
@@ -454,7 +463,7 @@ public class NPCDialogue : MonoBehaviour
         if (knowledge != null)
         {
             // facts about a place never fall back on what was used for the previous place
-            string notes = knowledge.BuildContextFor(visible ? text : (factsTopic ?? ""), language, sendBriefing, allowFollowUpReuse: visible);
+            string notes = knowledge.BuildContextFor(visible ? text : (factsTopic ?? ""), language, sendBriefing || (visible && NPCDestination.LooksLikeSelfLocation(text)), allowFollowUpReuse: visible);
             if (notes.Length > 0) query += notes + "\n\n";
         }
         factsTopic = null;
@@ -464,7 +473,13 @@ public class NPCDialogue : MonoBehaviour
         bool topicChanged = knowledge != null && knowledge.TopicChanged;
         if (visible)
         {
-            query += PlaceNotesFor(text, ref topicChanged);
+            string placeNotes = PlaceNotesFor(text, ref topicChanged);
+
+            // A new topic (and no place named) means "there" / "again" must not point back at the old place
+            if (topicChanged && NPCDestination.FindTargets(text).Count == 0) lastPlace = null;
+
+            query += WorldNote(text);
+            query += placeNotes;
             query += NavigationNote(text);
         }
         if (topicChanged)
@@ -487,8 +502,15 @@ public class NPCDialogue : MonoBehaviour
     private List<NPCDestination> PlacesFor(string text)
     {
         List<NPCDestination> list = NPCDestination.FindTargets(text);
-        if (list.Count == 0 && lastPlace != null && NPCDestination.RefersToPreviousPlace(text)) list.Add(lastPlace);
+        if (list.Count == 0 && lastPlace != null && messageIndex - lastPlaceMessage <= 2 && NPCDestination.RefersToPreviousPlace(text))
+            list.Add(lastPlace);
         return list;
+    }
+
+    private void SetLastPlace(NPCDestination place)
+    {
+        lastPlace = place;
+        lastPlaceMessage = messageIndex;
     }
 
     // Nearest to the player first
@@ -499,66 +521,6 @@ public class NPCDialogue : MonoBehaviour
         list.Sort((x, y) => (x.transform.position - p).sqrMagnitude.CompareTo((y.transform.position - p).sqrMagnitude));
     }
 
-    // "Where is the church?" / "Take me to the church" / "Are there any hotels?": answered instantly by the script
-    // (no waiting for the language model). One place -> a "follow me?" prompt with Yes / No buttons;
-    // several places -> a numbered list to pick from. Unknown places are left to the model.
-    private bool TryInstantNavigation(string text)
-    {
-        if (!offerNavigation || companion == null || NPCDestination.All.Count == 0) return false;
-
-        List<NPCDestination> places = PlacesFor(text);
-        if (places.Count == 0) return false;
-
-        bool command = NPCDestination.LooksLikeDirectCommand(text);
-        bool intent = command
-                      || NPCDestination.LooksLikeDirectionsRequest(text)
-                      || NPCDestination.LooksLikeExistenceQuestion(text);
-        if (!intent) return false;
-
-        pendingOffer = null;
-        pendingChoices = null;
-        offering = false;
-        choosing = false;
-        lastPlayerLine = null;
-        lastPlayerText = null;
-        AddLine(true, text);
-
-        if (places.Count > 1)
-        {
-            SortByDistance(places);
-            if (places.Count > 6) places.RemoveRange(6, places.Count - 6);
-
-            var names = new System.Text.StringBuilder();
-            for (int i = 0; i < places.Count; i++)
-            {
-                if (i > 0) names.Append(", ");
-                names.Append(places[i].NameFor(language));
-            }
-            choices = places;
-            choosing = true;
-            Debug.Log("NPCDialogue: several places match \"" + text + "\": " + string.Join(", ", places.ConvertAll(p => p.name)) +
-                      ". If one of them should not be in this list, check its Keywords (select it in the Hierarchy).", this);
-            AddLine(false, T("I know several places like that: " + names + ". Which one would you like to visit?",
-                             "Znam nekoliko takvih mjesta: " + names + ". Koje želiš posjetiti?"));
-            return true;
-        }
-
-        NPCDestination place = places[0];
-        lastPlace = place;
-        activeOffer = place;
-        offerKind = OfferKind.Guide;
-        offering = true;
-
-        string name = place.NameFor(language);
-        if (command)
-            AddLine(false, T("Of course! I'll take you to " + name + ". Ready to follow me?",
-                             "Naravno! Odvest ću te do: " + name + ". Jesi li spreman slijediti me?"));
-        else
-            AddLine(false, T("I know exactly where " + name + " is! Shall I take you there?",
-                             "Točno znam gdje je: " + name + "! Želiš li da te odvedem tamo?"));
-        return true;
-    }
-
     // If the player asks where something is, tell the model what it knows. One known place becomes an offer
     // (the Yes / No buttons appear after the NPC's reply); several places become a list to pick from;
     // an unknown place is answered honestly.
@@ -567,6 +529,24 @@ public class NPCDialogue : MonoBehaviour
         pendingOffer = null;
         pendingChoices = null;
         if (!offerNavigation || companion == null || NPCDestination.All.Count == 0) return "";
+        if (NPCDestination.LooksLikeSelfLocation(text))
+        {
+            // "Where am I?": explain Medjugorje in general (the facts come from the knowledge notes), then name what is nearby
+            NPCDestination near = null;
+            if (player != null)
+            {
+                var all = new List<NPCDestination>();
+                foreach (NPCDestination d in NPCDestination.All) if (d != null) all.Add(d);
+                SortByDistance(all);
+                if (all.Count > 0 && FlatDistance(all[0]) < 60f) near = all[0];
+            }
+            string nearText = near == null ? "" : (language == DialogueLanguage.Croatian
+                ? " Na kraju spomeni da je igrač trenutno blizu mjesta: " + near.NameFor(language) + "."
+                : " At the end, mention that the player is currently near " + near.NameFor(language) + ".");
+            return language == DialogueLanguage.Croatian
+                ? "[Igrač pita gdje se nalazi. Objasni mu u tri do četiri kratke rečenice što je Međugorje, koristeći bilješke iznad." + nearText + " Pozovi ga da pita što ga zanima. Ne nudi vođenje i ne spominji popis mjesta.]\n\n"
+                : "[The player asks where they are. Explain in three or four short sentences what Međugorje is, using the notes above." + nearText + " Invite them to ask whatever interests them. Do not offer to lead them anywhere and do not list places.]\n\n";
+        }
 
         bool hr = language == DialogueLanguage.Croatian;
         List<NPCDestination> places = PlacesFor(text);
@@ -597,7 +577,7 @@ public class NPCDialogue : MonoBehaviour
         if (places.Count == 1)
         {
             NPCDestination place = places[0];
-            lastPlace = place;
+            SetLastPlace(place);
             pendingOffer = place;
             string name = place.NameFor(language);
             return hr
@@ -605,10 +585,8 @@ public class NPCDialogue : MonoBehaviour
                 : "[The player asked where this place is: " + name + ". You know exactly where it is. In one or two short sentences, say that you know where it is and offer to take them there, then ask whether they would like you to lead the way. Do not give directions.]\n\n";
         }
 
-        string known = NPCDestination.NamesFor(language);
-        return hr
-            ? "[Igrač pita gdje je neko mjesto, ali ne znaš mjesto s tim imenom. Reci da ne znaš gdje je to. Mjesta do kojih možeš odvesti igrača: " + known + ".]\n\n"
-            : "[The player asked where a place is, but you don't know a place by that name. Say you don't know where that is. Places you can take the player to: " + known + ".]\n\n";
+        // Nothing recognised by keywords: the model decides from the area information (see WorldNote)
+        return "";
     }
 
     // The player picked a place from the list (or -2 = none of them)
@@ -637,7 +615,7 @@ public class NPCDialogue : MonoBehaviour
     private void AskMode(NPCDestination place, string lead)
     {
         activeOffer = place;
-        lastPlace = place;
+        SetLastPlace(place);
         focusRequested = true;
 
         if (!offerAutoFollow || playerMovement == null || companion == null)
@@ -673,6 +651,10 @@ public class NPCDialogue : MonoBehaviour
         activeOffer = null;
         if (place == null || companion == null) return;
 
+        // A new destination replaces the old one completely (also an auto-follow trip that was on hold)
+        if (trip != null) trip.End();
+        companion.CancelGuiding();
+
         bool followAfter = followAfterConversation && !stayPut;
         guidingTo = place;
 
@@ -699,7 +681,7 @@ public class NPCDialogue : MonoBehaviour
         string name = place.NameFor(language);
         AddLine(true, T("Yes, please.", "Da, molim."));
         factsTopic = place.FactsQuery();   // makes the matching knowledge entries available to the model
-        lastPlace = place;
+        SetLastPlace(place);
         topicPlace = place;
         ForgetOldTopic();                  // a new place is a new topic: forget what was said about the last one
 
@@ -785,11 +767,215 @@ public class NPCDialogue : MonoBehaviour
             : "[IMPORTANT: reply ONLY in English. Your previous reply was not in English.]";
     }
 
+    // ------------------------------------------------------------- the model decides about places
+
+    private const string AreaStart = "<<AREA>>";
+    private const string AreaEnd = "<<END AREA>>";
+    private static readonly Regex AreaBlock = new Regex(Regex.Escape(AreaStart) + ".*?" + Regex.Escape(AreaEnd) + @"\s*", RegexOptions.Singleline);
+    private static readonly Regex PlaceTag = new Regex(@"\[\[?\s*(GO|LIST)\s*[:=]\s*([^\]\r\n]*?)\s*\]\]?", RegexOptions.IgnoreCase);
+    private static readonly Regex EmptyTag = new Regex(@"\[\[\s*(?:NONE|NO TAG|NO)\s*\]\]", RegexOptions.IgnoreCase);
+
+    private string tagKind;    // "GO" or "LIST", from the model's last reply
+    private string tagArgs;
+
+    // Takes the [[GO: place]] / [[LIST: a; b]] tag out of the model's reply and remembers it
+    private string ExtractPlaceTag(string reply)
+    {
+        tagKind = null;
+        tagArgs = null;
+        if (string.IsNullOrEmpty(reply)) return reply;
+
+        Match m = PlaceTag.Match(reply);
+        if (m.Success)
+        {
+            tagKind = m.Groups[1].Value.ToUpperInvariant();
+            tagArgs = m.Groups[2].Value.Trim();
+        }
+        reply = PlaceTag.Replace(reply, "");
+        reply = EmptyTag.Replace(reply, "");
+        return reply.Trim();
+    }
+
+    // Turns the model's tag into the Yes / No offer or the numbered list (replacing a keyword guess)
+    private void ApplyPlaceTag()
+    {
+        string kind = tagKind, args = tagArgs;
+        tagKind = null;
+        tagArgs = null;
+        if (!offerNavigation || companion == null || string.IsNullOrWhiteSpace(args)) return;
+
+        var found = new List<NPCDestination>();
+        foreach (string part in args.Split(new[] { ';', '|' }, StringSplitOptions.RemoveEmptyEntries))
+            foreach (NPCDestination d in NPCDestination.ResolveName(part))
+                if (!found.Contains(d)) found.Add(d);
+
+        // a list written with commas ("Hotel A, Hotel B")
+        if (found.Count == 0 && args.Contains(","))
+            foreach (string part in args.Split(','))
+                foreach (NPCDestination d in NPCDestination.ResolveName(part))
+                    if (!found.Contains(d)) found.Add(d);
+
+        if (found.Count == 0) return;
+
+        // The tag must fit what the player just wrote. A small model can drag an old place (the hotel we talked
+        // about earlier) into an answer about something else; in that case the tag is ignored.
+        if (string.IsNullOrEmpty(lastVisibleText)) return;
+        List<NPCDestination> named = PlacesFor(lastVisibleText);
+        if (named.Count > 0)
+        {
+            found.RemoveAll(d => !named.Contains(d));
+            if (found.Count == 0) return;
+        }
+        else if (!NPCDestination.LooksLikePlaceSeeking(lastVisibleText) && !NPCDestination.LooksLikeDirectCommand(lastVisibleText))
+            return;
+
+        if (found.Count == 1)
+        {
+            SetLastPlace(found[0]);
+            pendingOffer = found[0];
+            pendingChoices = null;
+        }
+        else if (kind == "LIST" || found.Count > 1)
+        {
+            SortByDistance(found);
+            if (found.Count > 6) found.RemoveRange(6, found.Count - 6);
+            pendingChoices = found;
+            pendingOffer = null;
+        }
+    }
+
+    // What the model is told about the area on every message: where the player is, which places exist and
+    // how far they are. The model uses it to answer "where am I?", "is there a hotel nearby?", "I'm tired,
+    // where can I sleep?" in its own words, and to add a tag when the player wants to go somewhere.
+    private string WorldNote(string text)
+    {
+        if (!offerNavigation || companion == null || player == null || NPCDestination.All.Count == 0) return "";
+        bool hr = language == DialogueLanguage.Croatian;
+
+        // Only messages about places get the long area note. Small talk, facts and "Where am I?" don't,
+        // so the small model isn't distracted by a list of places and rules it doesn't need.
+        bool placeRelated = PlacesFor(text).Count > 0
+                            || NPCDestination.LooksLikeDirectionsRequest(text)
+                            || NPCDestination.LooksLikeDirectCommand(text)
+                            || NPCDestination.LooksLikePlaceSeeking(text);
+        if (NPCDestination.LooksLikeSelfLocation(text) || !placeRelated) return "";
+
+        var places = new List<NPCDestination>();
+        foreach (NPCDestination d in NPCDestination.All) if (d != null) places.Add(d);
+        if (places.Count == 0) return "";
+        SortByDistance(places);
+
+        NPCDestination nearest = places[0];
+        float nearestDistance = FlatDistance(nearest);
+        string nearestName = nearest.NameFor(language);
+
+        var sb = new System.Text.StringBuilder(AreaStart);
+        sb.Append(hr ? "\nPodaci o okolini (ne čitaj ih naglas). Igrač se trenutno nalazi " : "\nInformation about the area (don't read it out). The player is currently ");
+        if (nearestDistance < 15f)
+            sb.Append(hr ? "točno kod mjesta: " + nearestName + "." : "right next to " + nearestName + ".");
+        else if (nearestDistance < 80f)
+            sb.Append(hr ? "blizu mjesta: " + nearestName + " (" + DistanceWords(nearestDistance, true) + ")."
+                         : "close to " + nearestName + " (" + DistanceWords(nearestDistance, false) + " away).");
+        else
+            sb.Append(hr ? "negdje u selu; najbliže mjesto koje znaš je " + nearestName + " (" + DistanceWords(nearestDistance, true) + ")."
+                         : "somewhere in the village; the closest place you know is " + nearestName + " (" + DistanceWords(nearestDistance, false) + " away).");
+
+        if (nearestDistance < 15f)
+        {
+            string about = nearest.DescriptionFor(language);
+            if (about.Length > 0) sb.Append(hr ? " O njemu znaš: " : " What you know about it: ").Append(about);
+        }
+
+        sb.Append(hr ? "\nMjesta koja znaš (najbliža prva): " : "\nPlaces you know (nearest first): ");
+        for (int i = 0; i < places.Count && i < 24; i++)
+        {
+            if (i > 0) sb.Append("; ");
+            sb.Append(places[i].NameFor(language));
+            if (i < 8)
+            {
+                string detail = DistanceWords(FlatDistance(places[i]), hr);
+                string dir = DirectionWords(places[i], hr);
+                if (dir.Length > 0) detail += ", " + dir;
+                string d = places[i].DescriptionFor(language);
+                if (d.Length > 70) d = d.Substring(0, 70).Trim() + "...";
+                sb.Append(" (").Append(detail);
+                if (d.Length > 0) sb.Append("; ").Append(d);
+                sb.Append(")");
+            }
+        }
+
+        sb.Append(hr
+            ? "\nPravila: možeš odvesti igrača do bilo kojeg od ovih mjesta. Odgovori kratko i prirodno, ponudi da ga odvedeš, ne daj upute za put. " +
+              "Ne spominji mjesta koja nisu na popisu. Ako igrač ne traži mjesto, ignoriraj ovaj popis. " +
+              "Na kraju, u zasebnom retku, SAMO ako igrač želi ići na JEDNO mjesto dodaj [[GO: točan naziv]], a ako mu odgovara više mjesta [[LIST: naziv; naziv]]. Inače bez oznake."
+            : "\nRules: you can lead the player to any of these places. Answer briefly and naturally, offer to lead them, give no street directions. " +
+              "Never mention places that are not on the list. If the player isn't asking about a place, ignore this list. " +
+              "At the end, on its own line, ONLY if the player wants to go to ONE place add [[GO: exact name]], or [[LIST: name; name]] if several fit. Otherwise no tag.");
+        sb.Append("\n").Append(AreaEnd).Append("\n\n");
+        return sb.ToString();
+    }
+
+    // The area information is only useful for the message it was sent with (distances go stale),
+    // so it is removed from the model's memory once the reply has arrived.
+    private void StripAreaNotes()
+    {
+        if (agent == null) return;
+        try
+        {
+            var chat = agent.chat;
+            if (chat == null) return;
+            foreach (var message in chat)
+                if (message != null && message.content != null && message.content.Contains(AreaStart))
+                    message.content = AreaBlock.Replace(message.content, "");
+        }
+        catch (Exception) { }
+    }
+
+    private float FlatDistance(NPCDestination d)
+    {
+        Vector3 delta = d.transform.position - player.position;
+        delta.y = 0f;
+        return delta.magnitude;
+    }
+
+    private static string DistanceWords(float meters, bool hr)
+    {
+        if (meters >= 1000f)
+        {
+            string km = (meters / 1000f).ToString("0.0", CultureInfo.InvariantCulture);
+            return hr ? "oko " + km.Replace('.', ',') + " km" : "about " + km + " km";
+        }
+        int rounded = meters < 100f ? Mathf.Max(5, Mathf.RoundToInt(meters / 5f) * 5) : Mathf.RoundToInt(meters / 10f) * 10;
+        return hr ? "oko " + rounded + " m" : "about " + rounded + " m";
+    }
+
+    // Where a place is, as seen from the way the player is facing
+    private string DirectionWords(NPCDestination d, bool hr)
+    {
+        Vector3 to = d.transform.position - player.position;
+        to.y = 0f;
+        if (to.sqrMagnitude < 1f) return "";
+        Vector3 forward = player.forward;
+        forward.y = 0f;
+        if (forward.sqrMagnitude < 0.0001f) return "";
+
+        float angle = Vector3.SignedAngle(forward, to, Vector3.up);   // positive = to the right
+        bool right = angle > 0f;
+        float abs = Mathf.Abs(angle);
+
+        if (abs < 25f) return hr ? "ispred tebe" : "straight ahead";
+        if (abs < 70f) return hr ? (right ? "ispred desno" : "ispred lijevo") : (right ? "ahead to the right" : "ahead to the left");
+        if (abs < 110f) return hr ? (right ? "desno" : "lijevo") : (right ? "to the right" : "to the left");
+        if (abs < 155f) return hr ? (right ? "iza tebe desno" : "iza tebe lijevo") : (right ? "behind you to the right" : "behind you to the left");
+        return hr ? "iza tebe" : "behind you";
+    }
+
     private async Task AskAsync(string query)
     {
         try
         {
             string reply = await agent.Chat(query);
+            reply = ExtractPlaceTag(reply);   // [[GO: ...]] / [[LIST: ...]] written by the model is taken out of the text
             reply = LanguageGuard.Clean(reply, language, out bool wrongLanguage);
 
             // Wrong language: forget that exchange and try once more with a firmer instruction
@@ -797,6 +983,7 @@ public class NPCDialogue : MonoBehaviour
             {
                 DropLastExchange();
                 string second = await agent.Chat(StrongReminder() + "\n" + query);
+                second = ExtractPlaceTag(second);
                 second = LanguageGuard.Clean(second, language, out _);
                 if (second.Length > 0) reply = second;
             }
@@ -816,6 +1003,8 @@ public class NPCDialogue : MonoBehaviour
     {
         if (this == null) return;
         waiting = false;
+        StripAreaNotes();
+        ApplyPlaceTag();   // what the model decided overrides the keyword guess
 
         // The player asked where a known place is: after the NPC's offer, show the Yes / No buttons
         if (pendingOffer != null)
@@ -844,6 +1033,8 @@ public class NPCDialogue : MonoBehaviour
     {
         if (this == null) return;
         waiting = false;
+        StripAreaNotes();
+        tagKind = null;
         pendingOffer = null;
         pendingChoices = null;
         status = error;
@@ -1120,7 +1311,8 @@ public class NPCDialogue : MonoBehaviour
                 ? T("Press " + interactKey + " to talk", "Pritisni " + interactKey + " za razgovor")
                 : ("[" + interactKey + "]   " + NeutralName).Trim();
 
-            var r = new Rect(vw / 2f - 260f, vh - 96f, 520f, 54f);
+            bool tripOn = trip != null && trip.IsActive;   // keep clear of the speed gauge
+            var r = new Rect(vw / 2f - 260f, vh - (tripOn ? 330f : 96f), 520f, 54f);
             GUI.Box(r, prompt, promptStyle);
         }
         else if (selectingLanguage)
@@ -1139,7 +1331,7 @@ public class NPCDialogue : MonoBehaviour
     // The speed gauge shown while the character auto-follows the mouse
     private void DrawTripHud()
     {
-        if (trip == null || !trip.IsActive) return;
+        if (trip == null || !trip.IsActive || talking) return;
 
         EnsureStyles();
         float s = Screen.height / 720f * uiScale;
@@ -1198,8 +1390,8 @@ public class NPCDialogue : MonoBehaviour
         y += 30f + 8f;
 
         GUI.Label(new Rect(x, y, iw, rowHint),
-                  T("Arrow keys: look around  |  R / F: zoom in / out  |  - / +: speed  |  W A S D: take control",
-                    "Strelice: gledaj okolo  |  R / F: zumiraj / odzumiraj  |  - / +: brzina  |  W A S D: preuzmi kontrolu"),
+                  T("Arrow keys: look around  |  R / F: zoom  |  - / +: speed  |  " + interactKey + ": talk to the mouse  |  W A S D: take control",
+                    "Strelice: gledaj okolo  |  R / F: zumiraj  |  - / +: brzina  |  " + interactKey + ": razgovor s mišem  |  W A S D: preuzmi kontrolu"),
                   hudHintStyle);
 
         GUI.matrix = Matrix4x4.identity;
