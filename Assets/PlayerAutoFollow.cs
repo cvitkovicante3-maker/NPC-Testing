@@ -155,9 +155,7 @@ public class PlayerAutoFollow : MonoBehaviour
         Keyboard kb = Keyboard.current;
         if (kb != null)
         {
-            float x = (kb.rightArrowKey.isPressed ? 1f : 0f) - (kb.leftArrowKey.isPressed ? 1f : 0f);
-            float y = (kb.upArrowKey.isPressed ? 1f : 0f) - (kb.downArrowKey.isPressed ? 1f : 0f);   // up = look up
-            if (x != 0f || y != 0f) cam.FreeLook(x * lookKeySpeed * dt, y * lookKeySpeed * dt);
+            // (the arrow keys are handled by the camera itself, so they also work outside auto-follow)
 
             float zoom = (kb.rKey.isPressed ? 1f : 0f) - (kb.fKey.isPressed ? 1f : 0f);              // R = in, F = out
             if (zoom != 0f) cam.Zoom(zoom * zoomKeySpeed * dt);

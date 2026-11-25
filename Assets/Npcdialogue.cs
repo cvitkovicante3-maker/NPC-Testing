@@ -333,6 +333,7 @@ public class NPCDialogue : MonoBehaviour
 
         if (playerMovement != null) playerMovement.enabled = false;
         if (follower != null) { followerWasEnabled = follower.enabled; follower.enabled = false; }
+        if (followCamera != null) followCamera.LookInputEnabled = false;   // arrow keys move the text cursor now
         if (companion != null) companion.SetPaused(true);
         if (trip != null && trip.IsActive) trip.SetSuspended(true);   // talking while the character auto-follows: pause the trip
 
@@ -359,6 +360,7 @@ public class NPCDialogue : MonoBehaviour
         pendingOffer = null;
         activeOffer = null;
         startGuideAt = -1f;
+        if (followCamera != null) followCamera.LookInputEnabled = true;
         if (playerMovement != null) playerMovement.enabled = true;
         if (follower != null && followerWasEnabled) follower.enabled = true;
 

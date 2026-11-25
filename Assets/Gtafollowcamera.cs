@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 /// <summary>
 /// Old-school GTA chase camera. No mouse input at all.
@@ -50,6 +51,27 @@ public class GTAFollowCamera : MonoBehaviour
     [SerializeField] private float minZoom = 0.5f;
     [SerializeField] private float maxZoom = 3f;
 
+    [Header("Arrow-key look (always on)")]
+    [Tooltip("Arrow keys look around any time: left / right turn the view, up tilts it towards the sky, down tilts it back (and then looks down from above).")]
+    [SerializeField] private bool arrowKeyLook = true;
+    [SerializeField] private float arrowTurnSpeed = 90f;
+    [SerializeField] private float arrowTiltSpeed = 70f;
+    [Tooltip("How far the view can tilt up towards the sky.")]
+    [SerializeField] private float maxSkyTilt = 85f;
+    [Tooltip("Press this key to go straight back to the normal camera.")]
+    [SerializeField] private Key resetLookKey = Key.Home;
+    [Tooltip("Seconds after you let go of the arrow keys before the camera swings back behind the character.")]
+    [SerializeField] private float recenterDelay = 0.8f;
+    [Tooltip("How fast the camera swings back (degrees per second).")]
+    [SerializeField] private float recenterSpeed = 60f;
+    [Tooltip("How fast the sky tilt comes back down (degrees per second).")]
+    [SerializeField] private float recenterTiltSpeed = 40f;
+    [Tooltip("Higher = the return is more gradual (it eases in and out over about this many seconds).")]
+    [SerializeField] private float recenterSmoothTime = 0.9f;
+
+    /// <summary>Turned off while a chat box is open, so typing doesn't move the camera.</summary>
+    public bool LookInputEnabled { get; set; } = true;
+
     /// <summary>The object this camera follows (used by SetupDiagnostics).</summary>
     public Transform Target => target;
 
@@ -67,12 +89,19 @@ public class GTAFollowCamera : MonoBehaviour
     private float freePitch;
     private float freeZoom = 1f;
 
+    private bool arrowsUsed;      // the arrow keys were used and the camera has not centered yet
+    private bool recentering;
+    private float lastArrowTime;
+    private float skyTilt;        // how far the view is tilted up at the sky (degrees)
+    private float skyTiltShown;
+
     private bool FreeActive => Time.time < freeUntil || freeBlend > 0.01f;
 
     private void BeginFreeIfNeeded()
     {
         if (!FreeActive) freePitch = Mathf.Atan2(height - lookHeight, distance) * Mathf.Rad2Deg;
         freeUntil = Time.time + lookHoldSeconds;
+        recentering = false;
     }
 
     /// <summary>Orbit around the player (degrees). Call every frame while the player is looking around.</summary>
@@ -95,6 +124,8 @@ public class GTAFollowCamera : MonoBehaviour
     public void ResetLook()
     {
         freeUntil = 0f;
+        arrowsUsed = false;
+        recentering = true;
     }
 
     private void Awake()
@@ -130,9 +161,50 @@ public class GTAFollowCamera : MonoBehaviour
         UpdateCamera(0f, snap: true);
     }
 
+    private void ReadArrowKeys(float dt)
+    {
+        Keyboard kb = Keyboard.current;
+        if (kb == null) return;
+
+        if (kb[resetLookKey].wasPressedThisFrame) { ResetLook(); return; }
+
+        float x = (kb.rightArrowKey.isPressed ? 1f : 0f) - (kb.leftArrowKey.isPressed ? 1f : 0f);
+        float y = (kb.upArrowKey.isPressed ? 1f : 0f) - (kb.downArrowKey.isPressed ? 1f : 0f);
+
+        if (x != 0f || y != 0f)
+        {
+            arrowsUsed = true;
+            recentering = false;
+            lastArrowTime = Time.time;
+
+            if (x != 0f) FreeLook(x * arrowTurnSpeed * dt, 0f);
+
+            if (y > 0f)
+            {
+                float baseline = Mathf.Atan2(height - lookHeight, distance) * Mathf.Rad2Deg;
+                if (FreeActive && freePitch > baseline + 0.5f) FreeLook(0f, y * arrowTiltSpeed * dt);   // camera comes back down first
+                else skyTilt = Mathf.Min(maxSkyTilt, skyTilt + y * arrowTiltSpeed * dt);                 // then the view tilts to the sky
+            }
+            else
+            {
+                if (skyTilt > 0f) skyTilt = Mathf.Max(0f, skyTilt + y * arrowTiltSpeed * dt);
+                else FreeLook(0f, y * arrowTiltSpeed * dt);                                              // view from above
+            }
+            freeUntil = Time.time + 0.2f;   // stays free only while the keys are down (plus a moment)
+        }
+        else if (arrowsUsed && Time.time - lastArrowTime >= recenterDelay)
+        {
+            // keys released: swing back behind the character
+            arrowsUsed = false;
+            recentering = true;
+            freeUntil = 0f;
+        }
+    }
+
     private void LateUpdate()
     {
         if (target == null) return;
+        if (arrowKeyLook && LookInputEnabled) ReadArrowKeys(Time.deltaTime);
         UpdateCamera(Time.deltaTime, snap: false);
     }
 
@@ -158,9 +230,18 @@ public class GTAFollowCamera : MonoBehaviour
 
             // Orbit speed is capped, and eased in and out, so the camera never whips around.
             bool free = Time.time < freeUntil;
-            freeBlend = Mathf.MoveTowards(freeBlend, free ? 1f : 0f, dt * 2.5f);
-            float wantedYaw = (!free && (!swingOnlyWhileMoving || moving)) ? TargetYaw() : yaw;
-            yaw = Mathf.SmoothDampAngle(yaw, wantedYaw, ref yawVel, swingSmoothTime, maxSwingSpeed, dt);
+            freeBlend = Mathf.MoveTowards(freeBlend, free ? 1f : 0f, dt * (recentering ? 1.2f : 2.5f));
+
+            if (recentering)
+            {
+                skyTilt = Mathf.MoveTowards(skyTilt, 0f, (recenterTiltSpeed + skyTilt * 0.6f) * dt);   // fast when high, gentle at the end
+                if (skyTilt <= 0.01f && freeBlend <= 0.01f && Mathf.Abs(Mathf.DeltaAngle(yaw, TargetYaw())) < 1f) recentering = false;
+            }
+
+            // while recentering the camera swings back even if the character is standing still
+            float wantedYaw = (!free && (recentering || !swingOnlyWhileMoving || moving)) ? TargetYaw() : yaw;
+            yaw = Mathf.SmoothDampAngle(yaw, wantedYaw, ref yawVel, recentering ? recenterSmoothTime : swingSmoothTime,
+                                        recentering ? recenterSpeed : maxSwingSpeed, dt);
 
             smoothedY = Mathf.Lerp(smoothedY, anchorY, 1f - Mathf.Exp(-verticalSmoothing * dt));
         }
@@ -202,7 +283,9 @@ public class GTAFollowCamera : MonoBehaviour
         Vector3 forward = aim - pos;
         if (forward.sqrMagnitude < 0.0001f) forward = yawRot * Vector3.forward;
 
-        transform.SetPositionAndRotation(pos, Quaternion.LookRotation(forward, Vector3.up));
+        skyTiltShown = snap ? skyTilt : Mathf.Lerp(skyTiltShown, skyTilt, 1f - Mathf.Exp(-12f * dt));
+        Quaternion rotation = Quaternion.LookRotation(forward, Vector3.up) * Quaternion.Euler(-skyTiltShown, 0f, 0f);
+        transform.SetPositionAndRotation(pos, rotation);
     }
 
     // Nearest solid hit between 'from' and 'to', ignoring the target itself and NPCs.

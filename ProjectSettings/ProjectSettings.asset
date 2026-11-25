@@ -4,7 +4,7 @@
 PlayerSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 30
-  productGUID: 00000000000000000000000000000000
+  productGUID: 10afa960ff588964ead7affd09df0069
   AndroidProfiler: 0
   AndroidFilterTouchesWhenObscured: 0
   AndroidEnableSustainedPerformanceMode: 0
@@ -958,7 +958,7 @@ PlayerSettings:
   cloudProjectId: 41d3f309-d05e-41bd-b611-a315d89f5abd
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
-  projectName: Day & Night Cycle
+  projectName: NPC Testing 2026-11-08_17-43-07
   organizationId: antecvitkovic
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0
