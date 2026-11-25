@@ -122,11 +122,7 @@ public class GTAPlayerMovement : MonoBehaviour
             .With("Down", "<Keyboard>/s")
             .With("Left", "<Keyboard>/a")
             .With("Right", "<Keyboard>/d");
-        moveAction.AddCompositeBinding("2DVector")
-            .With("Up", "<Keyboard>/upArrow")
-            .With("Down", "<Keyboard>/downArrow")
-            .With("Left", "<Keyboard>/leftArrow")
-            .With("Right", "<Keyboard>/rightArrow");
+        // (the arrow keys only look around, see GTAFollowCamera; they never move the character)
         moveAction.AddBinding("<Gamepad>/leftStick");
 
         jumpAction = new InputAction("Jump", InputActionType.Button);

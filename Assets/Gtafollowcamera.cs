@@ -52,7 +52,7 @@ public class GTAFollowCamera : MonoBehaviour
     [SerializeField] private float maxZoom = 3f;
 
     [Header("Arrow-key look (always on)")]
-    [Tooltip("Arrow keys look around any time: left / right turn the view, up tilts it towards the sky, down tilts it back (and then looks down from above).")]
+    [Tooltip("Arrow keys look around any time and the view stays where you leave it until you press a movement key (W A S D). Left / right turn the view, up tilts it towards the sky, down tilts it back (and then looks down from above).")]
     [SerializeField] private bool arrowKeyLook = true;
     [SerializeField] private float arrowTurnSpeed = 90f;
     [SerializeField] private float arrowTiltSpeed = 70f;
@@ -60,8 +60,6 @@ public class GTAFollowCamera : MonoBehaviour
     [SerializeField] private float maxSkyTilt = 85f;
     [Tooltip("Press this key to go straight back to the normal camera.")]
     [SerializeField] private Key resetLookKey = Key.Home;
-    [Tooltip("Seconds after you let go of the arrow keys before the camera swings back behind the character.")]
-    [SerializeField] private float recenterDelay = 0.8f;
     [Tooltip("How fast the camera swings back (degrees per second).")]
     [SerializeField] private float recenterSpeed = 60f;
     [Tooltip("How fast the sky tilt comes back down (degrees per second).")]
@@ -161,8 +159,21 @@ public class GTAFollowCamera : MonoBehaviour
         UpdateCamera(0f, snap: true);
     }
 
+    private GTAPlayerMovement movement;
+
+    // W / A / S / D or the stick (the arrow keys are not movement keys)
+    private bool MovementKeyPressed()
+    {
+        if (movement == null && target != null) movement = target.GetComponent<GTAPlayerMovement>();
+        return movement != null && movement.HasManualInput;
+    }
+
     private void ReadArrowKeys(float dt)
     {
+        // the view stays exactly where you put it until you press a movement key (or Home)
+        if (arrowsUsed && !recentering) freeUntil = Time.time + 0.5f;
+
+        if (!LookInputEnabled) return;   // chatting: keys belong to the text box
         Keyboard kb = Keyboard.current;
         if (kb == null) return;
 
@@ -190,11 +201,11 @@ public class GTAFollowCamera : MonoBehaviour
                 if (skyTilt > 0f) skyTilt = Mathf.Max(0f, skyTilt + y * arrowTiltSpeed * dt);
                 else FreeLook(0f, y * arrowTiltSpeed * dt);                                              // view from above
             }
-            freeUntil = Time.time + 0.2f;   // stays free only while the keys are down (plus a moment)
+            freeUntil = Time.time + 0.5f;
         }
-        else if (arrowsUsed && Time.time - lastArrowTime >= recenterDelay)
+        else if (arrowsUsed && MovementKeyPressed())
         {
-            // keys released: swing back behind the character
+            // you want to move: swing back behind the character
             arrowsUsed = false;
             recentering = true;
             freeUntil = 0f;
@@ -204,7 +215,7 @@ public class GTAFollowCamera : MonoBehaviour
     private void LateUpdate()
     {
         if (target == null) return;
-        if (arrowKeyLook && LookInputEnabled) ReadArrowKeys(Time.deltaTime);
+        if (arrowKeyLook) ReadArrowKeys(Time.deltaTime);
         UpdateCamera(Time.deltaTime, snap: false);
     }
 
