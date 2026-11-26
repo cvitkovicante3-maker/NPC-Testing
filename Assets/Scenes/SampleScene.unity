@@ -1557,9 +1557,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 97e7e8ebfab090f4d9026f5523143717, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::cyclemanager
-  currentTime: 0
-  timeSpeed: 0.1
-  currentTimeString: 00:00
+  currentTime: 23
+  timeSpeed: 0.5
+  currentTimeString: 23:00
   sunLight: {fileID: 1870548880}
   sunLatitude: 46.4
   sunLongitude: 50
@@ -1615,7 +1615,7 @@ MonoBehaviour:
   moonLight: {fileID: 1725279041}
   moonLatitude: 46.9
   moonLongitude: 90
-  moonIntensity: 0.87
+  moonIntensity: 1.56
   moonIntensityMultiplier:
     serializedVersion: 2
     m_Curve:
@@ -1664,12 +1664,15 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
-  lunarDay: 1
+  lunarDay: 4
   lunarCycleSpeed: 1
   moonModel: {fileID: 0}
+  moonSize: 5.09
+  moonColor: {r: 0.95, g: 0.95, b: 0.85, a: 1}
   isDay: 0
   sunActive: 0
   moonActive: 1
+  moonStatus: 
   shadowType: 1
   shadowStrength: 0.6
   controlAmbient: 1
@@ -1689,7 +1692,7 @@ Transform:
   m_GameObject: {fileID: 871131680}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 39.76255, y: 0.10001, z: -31.22353}
+  m_LocalPosition: {x: 39.76255, y: 18.8, z: -31.22353}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -2857,7 +2860,7 @@ Light:
   serializedVersion: 13
   m_Type: 1
   m_Color: {r: 1, g: 1, b: 1, a: 1}
-  m_Intensity: 0.09093977
+  m_Intensity: 0.63450915
   m_Range: 10
   m_SpotAngle: 30
   m_InnerSpotAngle: 21.80208
@@ -2919,8 +2922,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1725279040}
   serializedVersion: 2
-  m_LocalRotation: {x: -0.25972953, y: 0.6576782, z: -0.25972953, w: -0.6576782}
-  m_LocalPosition: {x: 39.76255, y: 0.10001, z: -31.22353}
+  m_LocalRotation: {x: 0.29140908, y: -0.737896, z: 0.22360595, w: 0.5662073}
+  m_LocalPosition: {x: 25.3, y: 15.6, z: -16.8}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -2991,6 +2994,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1870548881}
   - component: {fileID: 1870548880}
+  - component: {fileID: 1870548882}
   m_Layer: 0
   m_Name: Sun
   m_TagString: Untagged
@@ -3071,13 +3075,42 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1870548879}
   serializedVersion: 2
-  m_LocalRotation: {x: -0.33657354, y: 0.3923951, z: 0.15694682, w: 0.84149396}
+  m_LocalRotation: {x: 0.31320843, y: -0.279201, z: -0.19953583, w: -0.8855127}
   m_LocalPosition: {x: 39.76255, y: 0.10001, z: -31.22353}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 50, y: -30, z: 0}
+--- !u!114 &1870548882
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1870548879}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 474bcb49853aa07438625e644c072ee6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.UniversalAdditionalLightData
+  m_UsePipelineSettings: 1
+  m_AdditionalLightsShadowResolutionTier: 2
+  m_CustomShadowLayers: 0
+  m_LightCookieSize: {x: 1, y: 1}
+  m_LightCookieOffset: {x: 0, y: 0}
+  m_SoftShadowQuality: 0
+  m_RenderingLayersMask:
+    serializedVersion: 0
+    m_Bits: 1
+  m_ShadowRenderingLayersMask:
+    serializedVersion: 0
+    m_Bits: 1
+  m_Version: 4
+  m_LightLayerMask: 1
+  m_ShadowLayerMask: 1
+  m_RenderingLayers: 1
+  m_ShadowRenderingLayers: 1
 --- !u!1001 &1896635933
 PrefabInstance:
   m_ObjectHideFlags: 0

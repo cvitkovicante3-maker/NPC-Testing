@@ -41,13 +41,20 @@ public class cyclemanager : MonoBehaviour
     [Header("🌕 Lunar Cycle Settings")]
     [Range(1, 30)] public int lunarDay = 1;
     public float lunarCycleSpeed = 1f;
+    [Tooltip("The moon you see in the sky. Leave empty and a simple glowing moon is created for you. Or drag in your own sphere / model (no collider needed).")]
     public Transform moonModel;
+    [Tooltip("How big the moon looks in the sky. 1 = about the size of the real moon seen from Earth, ~2.5 times is easier to notice.")]
+    [Range(0.5f, 8f)] public float moonSize = 3f;
+    public Color moonColor = new Color(0.95f, 0.95f, 0.85f);
 
     [Space]
     [Header("🔁 Status Flags (Read-Only)")]
     public bool isDay = true;
     public bool sunActive = true;
     public bool moonActive = true;
+
+    [Header("Moon status (read-only, for troubleshooting)")]
+    [SerializeField] private string moonStatus;
 
     [Header("Shadows")]
     public LightShadows shadowType = LightShadows.Soft;
@@ -225,11 +232,83 @@ public class cyclemanager : MonoBehaviour
         }
     }
 
+    private Camera skyCamera;
+    private bool warnedNoCamera;
+
+    // The camera that looks at the world: the one tagged MainCamera, or the one the follow camera script is on, or any enabled one
+    static Camera FindSkyCamera()
+    {
+        if (Camera.main != null) return Camera.main;
+        var follow = FindFirstObjectByType<GTAFollowCamera>();
+        if (follow != null && follow.GetComponent<Camera>() != null) return follow.GetComponent<Camera>();
+        foreach (Camera c in Camera.allCameras) if (c.enabled && c.targetTexture == null) return c;
+        return null;
+    }
+    private bool createdMoon;
+
+    void CreateMoonIfMissing()
+    {
+        if (!Application.isPlaying) return;
+
+        // A prefab ASSET dragged into the field (from the Project window) is not an object in the scene, so it can never be seen
+        if (moonModel != null && !moonModel.gameObject.scene.IsValid())
+        {
+            Debug.LogWarning("cyclemanager: 'Moon Model' points to a prefab in the Project window, not to an object in the scene. Ignoring it and creating a moon instead.", this);
+            moonModel = null;
+        }
+        if (moonModel != null) return;
+
+        GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        sphere.name = "Moon (auto)";
+        Destroy(sphere.GetComponent<Collider>());
+        // not a child of this object: a scaled parent would change the moon's size
+
+        // an unlit material, so the moon glows by itself and does not need light to be seen
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) shader = Shader.Find("Unlit/Color");
+        if (shader == null) shader = Shader.Find("Sprites/Default");
+        var renderer = sphere.GetComponent<Renderer>();
+        renderer.material = new Material(shader) { color = moonColor };
+        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+
+        moonModel = sphere.transform;
+        createdMoon = true;
+        Debug.Log("cyclemanager: created the moon object 'Moon (auto)'. It shows at night.", this);
+    }
+
+    // Puts the moon far away in the sky in the direction the moon light comes from, and fades it with the lunar day
     void UpdateMoonPhase()
     {
-        if (moonModel == null) return;
+        if (!Application.isPlaying) return;
+
+        CreateMoonIfMissing();
+        if (moonModel == null || moonLight == null) return;
+
+        if (skyCamera == null) skyCamera = FindSkyCamera();
+        if (skyCamera == null)
+        {
+            if (!warnedNoCamera) { warnedNoCamera = true; Debug.LogWarning("cyclemanager: no camera found, so the moon can't be placed in the sky.", this); }
+            return;
+        }
+
+        Vector3 towardMoon = -moonLight.transform.forward;                 // the light shines FROM the moon
+        bool aboveHorizon = towardMoon.y > -0.02f;
+        bool show = moonActive && aboveHorizon;
+        moonStatus = show ? "Visible. Look up (Up arrow) towards the moon." : (!moonActive ? "Hidden: daytime (the moon only shows about 18:00 - 06:00)" : "Hidden: moon is below the horizon");
+        if (moonModel.gameObject.activeSelf != show) moonModel.gameObject.SetActive(show);
+        if (!show) return;
+
+        float distance = Mathf.Clamp(skyCamera.farClipPlane * 0.8f, 50f, 800f);
+        moonModel.position = skyCamera.transform.position + towardMoon.normalized * distance;
+        moonModel.rotation = Quaternion.LookRotation(moonModel.position - skyCamera.transform.position);
+
         float phase = (lunarDay - 1) / 29f;
-        float scale = Mathf.Max(Mathf.Sin(phase * Mathf.PI), 0.1f);
-        moonModel.localScale = Vector3.one * scale;
+        float phaseScale = Mathf.Max(Mathf.Sin(phase * Mathf.PI), 0.25f);   // smaller around new moon
+        float diameter = 2f * distance * Mathf.Tan(1.25f * Mathf.Deg2Rad) * moonSize * phaseScale;
+        Vector3 parentScale = moonModel.parent != null ? moonModel.parent.lossyScale : Vector3.one;
+        moonModel.localScale = new Vector3(diameter / Mathf.Max(0.0001f, parentScale.x),
+                                           diameter / Mathf.Max(0.0001f, parentScale.y),
+                                           diameter / Mathf.Max(0.0001f, parentScale.z));
     }
 }
